@@ -379,19 +379,14 @@ def compute(u):
     far_km = km(home, nearest["s"]["p"])
     if far_km > 25:
         L.append(f"⚠️ _עדיין אין לי סניפים באזור שלך (הקרוב ביותר: {far_km:.0f} ק\"מ)._\n")
-    L.append(f"🏆 *הסופר המנצח לקנייה שלך:*\n*{s['n']}*")
-    L.append(f"💰 הסל: *₪{best['tot']:.0f}*" + (" (כולל דלק)" if car and best["fuel"] >= 1 else ""))
+    L.append(f"🏆 הסופר המנצח: *{s['n']}*")
+    L.append(f"💰 מחיר הסל: *₪{best['tot']:.0f}*")
     if avg and avg - best["tot"] >= 1:
-        L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}* לעומת הממוצע באזור")
-    L.append(f"📍 {round(best['min'])} דק' {how} · {s['a']}")
-    note = []
-    if best["miss"]: note.append(f"{best['miss']} מוצרים חסרים בסניף")
-    if gone: note.append(f"{len(gone)} מוצרים לא נמצאו")
-    if note: L.append("_" + " · ".join(note) + "_")
+        L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}*" + (" (כולל עלות הנסיעה)" if car else ""))
+    L.append(f"📍 {best['d'] / 2:.1f} ק\"מ ממך · {round(best['min'])} דק' {how}")
     split_txt = None
     if split and best["tot"] - split["tot"] > split_min:
         A, B = split["A"]["s"], split["B"]["s"]
-        L.append(f"\n💡 אם מתחלקים עם *{(B if A['key'] == s['key'] else A)['n']}* – חוסכים עוד *₪{best['tot'] - split['tot']:.0f}*")
         split_txt = (f"🔀 *קנייה בשני סופרים – ₪{split['tot']:.0f}*\n\n*{A['n']}* ({A['a']}):\n" + "\n".join("• " + x for x in split["inA"]) +
                      f"\n\n*{B['n']}* ({B['a']}):\n" + "\n".join("• " + x for x in split["inB"]))
     # פירוט מחירי הסל בסופר המנצח
@@ -406,7 +401,8 @@ def compute(u):
     return {"main": "\n".join(L),
             "nav": f"https://waze.com/ul?ll={s['p'][0]},{s['p'][1]}&navigate=yes",
             "details": f"📋 *הסל שלך ב{s['n']}:*\n" + "\n".join(det) + fresh,
-            "others": "🏪 *כל הסופרים בטווח:*\n" + "\n".join(
+            "others": (f"💡 אם מתחלקים בין *{split['A']['s']['n']}* ל*{split['B']['s']['n']}* חוסכים עוד *₪{best['tot'] - split['tot']:.0f}*\n\n" if split_txt else "")
+                      + "🏪 *כל הסופרים בטווח:*\n" + "\n".join(
                 f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} {r['s']['n']} – ₪{r['tot']:.0f} ({round(r['min'])} דק')"
                 + (f" _· חסרים {r['miss']}_" if r["miss"] else "") for r in inrange[:10]) + fresh,
             "split": split_txt}
@@ -446,9 +442,7 @@ def finish(to, u):
         for m in res: send_text(to, m)
     else:
         u["last"] = {k: res[k] for k in ("details", "others", "split")}
-        btns = [(res["nav"], "🗺️ ניווט"), ("det", "📋 פירוט"), ("oth", "🏪 סופרים אחרים")]
-        if res["split"]: btns.append(("spl", "🔀 שני סופרים"))
-        send_buttons(to, res["main"], btns)
+        send_buttons(to, res["main"], [("oth", "🏪 הצג סופרים אחרים")])
     u["hist"] = (u["hist"] + [{"d": int(time.time()), "items": [{"code": x.get("code", ""), "name": x["name"], "qty": x["qty"]} for x in u["items"]]}])[-12:]
     u["step"] = "done"; save_users()
     if len(u["hist"]) == 1:
