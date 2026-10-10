@@ -79,6 +79,8 @@ class Data:
         for i, s in score.items():
             it = self.items[i]
             if not it[0][0].isdigit() and len(q) <= 3: s += 1
+            first = toks(it[1])[:1]
+            if first and stem(first[0]) == stem(q[0]): s += 0.6   # "אורז בסמטי" לפני "קובה אורז"
             sc = s / (len(q) + 0.3 * len(self.itoks[i])) + 0.35 * it[2] / self.max_avail
             if sc > 0.4: out.append((sc, i))
         return [i for _, i in sorted(out, reverse=True)[:n]]

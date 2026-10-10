@@ -151,15 +151,18 @@ def send_text(to, text):
     graph_post(f"{PHONE_ID}/messages", {"messaging_product": "whatsapp", "to": to, "type": "text",
                                          "text": {"body": text[:4000], "preview_url": True}})
 
+def tg_btn(i, t):
+    return {"text": t, "url": i} if i.startswith("http") else {"text": t, "callback_data": i}
+
 def send_buttons(to, text, buttons):  # buttons: [(id, title<=20)] up to 3
     if is_tg(to):
         return tg_call("sendMessage", {"chat_id": to[3:], "text": tg_html(text), "parse_mode": "HTML",
-                        "reply_markup": {"inline_keyboard": [[{"text": tt, "callback_data": i} for i, tt in buttons[k:k + 2]]
+                        "reply_markup": {"inline_keyboard": [[tg_btn(i, tt) for i, tt in buttons[k:k + 2]]
                                                              for k in range(0, len(buttons), 2)] if len(buttons) > 3 else
-                                                            [[{"text": tt, "callback_data": i}] for i, tt in buttons]}})
+                                                            [[tg_btn(i, tt)] for i, tt in buttons]}})
     graph_post(f"{PHONE_ID}/messages", {"messaging_product": "whatsapp", "to": to, "type": "interactive",
         "interactive": {"type": "button", "body": {"text": text[:1024]},
-                        "action": {"buttons": [{"type": "reply", "reply": {"id": i, "title": t[:20]}} for i, t in buttons[:3]]}}})
+                        "action": {"buttons": [{"type": "reply", "reply": {"id": i, "title": t[:20]}} for i, t in [b for b in buttons if not b[0].startswith("http")][:3]]}}})
 
 def send_location_request(to, text):
     if is_tg(to):
@@ -346,6 +349,7 @@ def compute(u):
     nearest = rows[0]
     pool = [r for r in rows if r["min"] <= pr["maxMin"]] or [nearest]
     # סניף שחסרים בו הרבה מהמוצרים לא באמת עונה על הסל
+    inrange = sorted(pool, key=lambda r: r["tot"])
     full = [r for r in pool if r["miss"] <= max(1, 0.2 * len(items))]
     if full: pool = full
     ranked = sorted(pool, key=lambda r: r["tot"]); best = ranked[0]
@@ -367,27 +371,45 @@ def compute(u):
                 d = km(home, A["s"]["p"]) + km(A["s"]["p"], B["s"]["p"]) + km(B["s"]["p"], home)
                 t = tot + cost(d)
                 if not split or t < split["tot"]: split = {"A": A, "B": B, "tot": t, "inA": inA, "inB": inB}
-    s = best["s"]; lines = []
+    s = best["s"]
+    how = "נסיעה" if car else ("בתחבורה ציבורית" if bus else "הליכה")
+    others = [r for r in ranked if r["s"]["key"] != s["key"]]
+    avg = sum(r["tot"] for r in others) / len(others) if others else None
+    L = []
     far_km = km(home, nearest["s"]["p"])
     if far_km > 25:
-        lines.append(f"⚠️ _עדיין אין לי סניפים באזור שלך – הקרוב ביותר במאגר נמצא במרחק {far_km:.0f} ק\"מ. "
-                     f"בקרוב המאגר יכלול את כל הסניפים בארץ._\n")
-    lines += [f"🏆 *הכי משתלם בשבילך:*\n*{s['n']}, {s['a']}*",
-              f"הסל יעלה *₪{best['sum']:.0f}*" + (f" + ₪{best['fuel']:.0f} דלק = *₪{best['tot']:.0f}*" if car and best["fuel"] >= 1 else "")]
-    if best["miss"]: lines.append(f"_{best['miss']} מוצרים לא נמצאו בסניף, וחושבו לפי מחיר ממוצע_")
-    if gone: lines.append(f"_לא נמצאו היום במאגר: {', '.join(gone[:5])}_")
-    if nearest["s"]["key"] != s["key"] and nearest["tot"] - best["tot"] > 1:
-        lines.append(f"חוסך *₪{nearest['tot'] - best['tot']:.0f}* לעומת הסופר הכי קרוב אליך ({nearest['s']['n']})")
-    lines.append(f"📍 {round(best['min'])} דקות {'נסיעה' if car else ('בתחבורה ציבורית' if bus else 'הליכה')}")
-    lines.append(f"🗺️ ניווט: https://waze.com/ul?ll={s['p'][0]},{s['p'][1]}&navigate=yes")
-    msgs = ["\n".join(lines)]
+        L.append(f"⚠️ _עדיין אין לי סניפים באזור שלך (הקרוב ביותר: {far_km:.0f} ק\"מ)._\n")
+    L.append(f"🏆 *הסופר המנצח לקנייה שלך:*\n*{s['n']}*")
+    L.append(f"💰 הסל: *₪{best['tot']:.0f}*" + (" (כולל דלק)" if car and best["fuel"] >= 1 else ""))
+    if avg and avg - best["tot"] >= 1:
+        L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}* לעומת הממוצע באזור")
+    L.append(f"📍 {round(best['min'])} דק' {how} · {s['a']}")
+    note = []
+    if best["miss"]: note.append(f"{best['miss']} מוצרים חסרים בסניף")
+    if gone: note.append(f"{len(gone)} מוצרים לא נמצאו")
+    if note: L.append("_" + " · ".join(note) + "_")
+    split_txt = None
     if split and best["tot"] - split["tot"] > split_min:
         A, B = split["A"]["s"], split["B"]["s"]
-        msgs.append(f"💡 אם מתחלקים בין *{A['n']}* ({A['a']}) ל*{B['n']}* ({B['a']}) חוסכים עוד *₪{best['tot'] - split['tot']:.0f}*.\n\n"
-                    f"*ב{A['n']}:* {', '.join(split['inA'][:15])}\n\n*ב{B['n']}:* {', '.join(split['inB'][:15])}")
-    msgs.append("כל הסופרים בטווח:\n" + "\n".join(f"{'✅' if k == 0 else '▫️'} {r['s']['n']} · {r['s']['a']} – ₪{r['tot']:.0f} ({round(r['min'])} דק')" for k, r in enumerate(ranked[:8]))
-                + (f"\n\n_מחירים ומבצעים מעודכנים ל-{D.built[8:10]}/{D.built[5:7]} {D.built[11:16]}_" if len(D.built) >= 16 else ""))
-    return msgs
+        L.append(f"\n💡 אם מתחלקים עם *{(B if A['key'] == s['key'] else A)['n']}* – חוסכים עוד *₪{best['tot'] - split['tot']:.0f}*")
+        split_txt = (f"🔀 *קנייה בשני סופרים – ₪{split['tot']:.0f}*\n\n*{A['n']}* ({A['a']}):\n" + "\n".join("• " + x for x in split["inA"]) +
+                     f"\n\n*{B['n']}* ({B['a']}):\n" + "\n".join("• " + x for x in split["inB"]))
+    # פירוט מחירי הסל בסופר המנצח
+    det = []
+    for it in sorted(items, key=lambda it: -(best["P"].get(it["i"]) or med[it["i"]]) * it["qty"]):
+        p = best["P"].get(it["i"])
+        q = f" ×{it['qty']:g}" if it["qty"] != 1 else ""
+        det.append(f"• {it['name']}{q} – " + (f"₪{p * it['qty']:.2f}" if p is not None else f"~₪{med[it['i']] * it['qty']:.2f} _(חסר בסניף)_"))
+    if gone: det.append("\n_לא נמצאו במאגר: " + ", ".join(gone) + "_")
+    if car and best["fuel"] >= 1: det.append(f"\n⛽ דלק הלוך-חזור: ₪{best['fuel']:.0f}")
+    fresh = f"\n\n_מחירים ומבצעים מעודכנים ל-{D.built[8:10]}/{D.built[5:7]} {D.built[11:16]}_" if len(D.built) >= 16 else ""
+    return {"main": "\n".join(L),
+            "nav": f"https://waze.com/ul?ll={s['p'][0]},{s['p'][1]}&navigate=yes",
+            "details": f"📋 *הסל שלך ב{s['n']}:*\n" + "\n".join(det) + fresh,
+            "others": "🏪 *כל הסופרים בטווח:*\n" + "\n".join(
+                f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} {r['s']['n']} – ₪{r['tot']:.0f} ({round(r['min'])} דק')"
+                + (f" _· חסרים {r['miss']}_" if r["miss"] else "") for r in inrange[:10]) + fresh,
+            "split": split_txt}
 
 # ---------- שיחה ----------
 WELCOME = "*קונה אישי 🛒*\nהיי{name}! אני אעזור לך לחסוך בקניות בסופר.\n5 שאלות קצרות (כ-20 שניות) ומתחילים 👇"
@@ -419,10 +441,18 @@ def ask(to, step, u, intro=""):
     save_users()
 
 def finish(to, u):
-    for m in compute(u): send_text(to, m)
+    res = compute(u)
+    if isinstance(res, list):
+        for m in res: send_text(to, m)
+    else:
+        u["last"] = {k: res[k] for k in ("details", "others", "split")}
+        btns = [(res["nav"], "🗺️ ניווט"), ("det", "📋 פירוט"), ("oth", "🏪 סופרים אחרים")]
+        if res["split"]: btns.append(("spl", "🔀 שני סופרים"))
+        send_buttons(to, res["main"], btns)
     u["hist"] = (u["hist"] + [{"d": int(time.time()), "items": [{"code": x.get("code", ""), "name": x["name"], "qty": x["qty"]} for x in u["items"]]}])[-12:]
     u["step"] = "done"; save_users()
-    send_text(to, "שמרתי את הקנייה כדי ללמוד את ההרגלים שלך 🙂\nמתי שרוצים – פשוט כותבים *היי*, שולחים קבלה או רשימה, ואבדוק שוב. לשינוי הגדרות כתוב *הגדרות*.")
+    if len(u["hist"]) == 1:
+        send_text(to, "_שמרתי את הקנייה כדי ללמוד את ההרגלים שלך. מתי שרוצים – פשוט כותבים *היי* 🙂_")
     pr = u["prefs"]; n = len(u["hist"])
     if n >= 1 and "clubs" not in pr:                       # אחרי הקנייה הראשונה
         pr["clubs"] = []; return ask_clubs(to, u, first=True)
@@ -545,6 +575,9 @@ def handle(msg):
         save_users(); return ask_clubs(to, u)
     if reply in ("kreg", "kmeh"):
         pr["kosher"] = reply[1:]; save_users(); return send_text(to, "רשמתי 👍")
+    if reply in ("det", "oth", "spl"):
+        txt = (u.get("last") or {}).get({"det": "details", "oth": "others", "spl": "split"}[reply])
+        return send_text(to, txt or "אין לי עדיין חישוב להציג – כתבו *היי* כדי להתחיל קנייה 🙂")
     if reply == "remind_off":
         pr["remind_off"] = True; u.pop("remind_at", None); save_users()
         return send_text(to, "בסדר, לא אשלח יותר תזכורות 👍 (כדי להפעיל שוב – כתבו *הגדרות*)")
