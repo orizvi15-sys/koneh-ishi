@@ -386,8 +386,9 @@ def compute(u):
 
 # ---------- שיחה ----------
 WELCOME = "*קונה אישי 🛒*\nהיי! אני אעזור לך לחסוך בקניות בסופר.\n4 שאלות קצרות ומתחילים 👇"
+GREET = re.compile(r"^\W*(הי+|שלום|אהלן|הלו|יו|מה קורה|מה נשמע|מה המצב|מה הולך|מה איתך|בוקר טוב|ערב טוב|צהריים טובים|hi+|hey|hello|start)\b[^,\n]*$", re.I)
 
-def ask(to, step, u):
+def ask(to, step, u, intro=""):
     u["step"] = step
     if step == "loc":
         send_location_request(to, "*1️⃣ מאיפה יוצאים לקניות?*\nלוחצים על הכפתור ושולחים מיקום 📍")
@@ -400,16 +401,16 @@ def ask(to, step, u):
     elif step == "basket":
         L = learned(u)
         if L:
-            send_buttons(to, f"*ומה קונים הפעם?*\nלמדתי מה אתה קונה בדרך כלל 📈", [("mine", f"🛒 הסל הקבוע שלי"), ("cam", "📷 צילום קבלה"), ("list", "✍️ אכתוב רשימה")])
+            send_buttons(to, intro + f"*ומה קונים הפעם?*\nלמדתי מה אתה קונה בדרך כלל 📈", [("mine", f"🛒 הסל הקבוע שלי"), ("cam", "📷 צילום קבלה"), ("list", "✍️ אכתוב רשימה")])
         else:
-            send_buttons(to, "*ומה קונים?*", [("cam", "📷 צילום קבלה"), ("list", "✍️ אכתוב רשימה"), ("weekly", "🛒 סל שבועי רגיל")])
+            send_buttons(to, intro + "*ומה קונים?*", [("cam", "📷 צילום קבלה"), ("list", "✍️ אכתוב רשימה"), ("weekly", "🛒 סל שבועי רגיל")])
     save_users()
 
 def finish(to, u):
     for m in compute(u): send_text(to, m)
     u["hist"] = (u["hist"] + [{"d": int(time.time()), "items": [{"code": x.get("code", ""), "name": x["name"], "qty": x["qty"]} for x in u["items"]]}])[-12:]
     u["step"] = "done"; save_users()
-    send_text(to, "שמרתי את הקנייה כדי ללמוד את ההרגלים שלך 🙂\nמתי שרוצים – שולחים קבלה או רשימה ואבדוק שוב. לשינוי הגדרות כתוב *הגדרות*.")
+    send_text(to, "שמרתי את הקנייה כדי ללמוד את ההרגלים שלך 🙂\nמתי שרוצים – פשוט כותבים *היי*, שולחים קבלה או רשימה, ואבדוק שוב. לשינוי הגדרות כתוב *הגדרות*.")
 
 def got_items(to, u, items):
     found, missed = match_items(items)
@@ -436,8 +437,12 @@ def handle(msg):
 
     if text == "מחק אותי":
         USERS.pop(to, None); save_users()
-        return send_text(to, "מחקתי את כל המידע שלך 🗑️ כדי להתחיל מחדש כתבו שלום.")
-    if text in ("הגדרות", "התחל", "מחדש", "/start") or u["step"] == "new":
+        return send_text(to, "מחקתי את כל המידע שלך 🗑️ כדי להתחיל מחדש כתבו היי.")
+    if GREET.match(text) and len(text) <= 25:
+        if all(k in pr for k in ("home", "mode", "maxMin", "splitMin")):
+            return ask(to, "basket", u, intro=f"היי{' ' + u['name'] if u.get('name') else ''}! 👋 טוב לראות אותך שוב.\n\n")
+        send_text(to, WELCOME); return ask(to, "loc", u)
+    if text in ("הגדרות", "התחל", "מחדש", "/start", "/settings") or u["step"] == "new":
         if u["step"] == "new" and pr.get("home"):
             u["step"] = "keep"; save_users()
             return send_buttons(to, WELCOME + "\n\nיש לי את ההעדפות שלך מהפעם הקודמת.", [("keep", "להמשיך איתן"), ("reset", "להתחיל מחדש")])
@@ -589,6 +594,10 @@ if __name__ == "__main__":
     if TG_TOKEN and PUBLIC_URL:
         try:
             print("חיבור טלגרם:", tg_call("setWebhook", {"url": PUBLIC_URL.rstrip("/") + "/telegram", "drop_pending_updates": True}))
+            tg_call("setMyDescription", {"description": "היי! אני קונה אישי 🛒 אני משווה מחירים בין הסופרים שלידך ואומר לך איפה הכי משתלם לקנות – כולל מבצעים ודלק. פשוט כותבים לי היי 👋"})
+            tg_call("setMyShortDescription", {"short_description": "משווה מחירי סופרים לידך ואומר איפה הכי משתלם 🛒"})
+            tg_call("setMyCommands", {"commands": [{"command": "start", "description": "להתחיל / קנייה חדשה"},
+                                                   {"command": "settings", "description": "לשנות מיקום והעדפות"}]})
         except Exception as ex:
             print("חיבור טלגרם נכשל:", ex)
     elif not TG_TOKEN:
