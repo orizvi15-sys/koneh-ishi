@@ -80,8 +80,11 @@ def main():
         for code, n in d["names"].items():
             n = clean_name(n)
             if n: namecnt[code][n] += 1
+        old = (datetime.now(IL) - timedelta(days=10)).strftime("%Y%m%d")
         for k, v in d["prices"].items():
-            if k in prices and stores[k].get("ts", "") > d["stores"][k].get("ts", ""): continue
+            ts = d["stores"][k].get("ts", "")
+            if len(ts) >= 8 and ts[:2] == "20" and ts[:8] < old: continue  # קובץ ישן מדי (הרשת לא מעדכנת)
+            if k in prices and stores[k].get("ts", "") > ts: continue
             prices[k] = v; stores[k] = d["stores"][k]
     print("chains", len(chains), "stores with prices", len(prices))
 

@@ -1,0 +1,84 @@
+# הורדת מחירים ומבצעים מכל הרשתות, כל לילה ב-03:00 (שעון קיץ; 02:00 בשעון חורף)
+name: daily-data
+on:
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: daily-data
+  cancel-in-progress: false
+env:
+  GH_TOKEN: ${{ github.token }}
+  REL: data-latest
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Make sure the data release exists
+        run: |
+          gh release view "$REL" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+          gh release create "$REL" -R "$GITHUB_REPOSITORY" --title "נתוני מחירים (מתעדכן כל לילה)" \
+             --notes "קבצי נתונים שנבנים אוטומטית ע\"י daily-data. הבוט מוריד את koneh-data.bin." --latest=false
+
+  collect:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        chain: [SHUFERSAL, RAMI_LEVY, YOHANANOF, OSHER_AD, VICTORY_NEW_SOURCE, TIV_TAAM, YAYNO_BITAN_AND_CARREFOUR,
+                HAZI_HINAM, MAHSANI_ASHUK_NEW_SOURCE, KESHET, BAREKET, CITY_MARKET_KIRYATGAT, CITY_MARKET_SHOPS,
+                DOR_ALON, HET_COHEN_NEW_SOURCE, KING_STORE, NETIV_HASED, POLIZER, SALACH_DABACH, SHEFA_BARCART_ASHEM,
+                SHUK_AHIR, STOP_MARKET, SUPER_YUDA, SUPER_SAPIR, FRESH_MARKET_AND_SUPER_DOSH, YELLOW, ZOL_VEBEGADOL]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Install scraper
+        run: |
+          pip install -q "git+https://github.com/OpenIsraeliSupermarkets/israeli-supermarket-scarpers.git"
+          python -m playwright install --with-deps chromium >/dev/null 2>&1 || true
+      - name: Download and process ${{ matrix.chain }}
+        run: python tools/collect.py ${{ matrix.chain }} out
+      - name: Upload to release
+        if: hashFiles('out/*.json.gz') != ''
+        run: gh release upload "$REL" out/*.json.gz --clobber -R "$GITHUB_REPOSITORY"
+
+  build:
+    needs: collect
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Fetch chain files and caches
+        run: |
+          mkdir -p in
+          gh release download "$REL" -p 'chain-*.json.gz' -D in -R "$GITHUB_REPOSITORY"
+          gh release download "$REL" -p geocache.json -D . -R "$GITHUB_REPOSITORY" || true
+          gh release download "$REL" -p cities.json -D . -R "$GITHUB_REPOSITORY" || true
+          ls -la in
+      - name: Build nationwide dataset
+        run: python tools/build_data.py in koneh-data.bin --geocache geocache.json --cities cities.json --max-geocode 3500 --summary summary.md
+      - name: Publish
+        if: always()
+        run: |
+          [ -f koneh-data.bin ] && gh release upload "$REL" koneh-data.bin --clobber -R "$GITHUB_REPOSITORY"
+          for f in geocache.json cities.json summary.md; do [ -f $f ] && gh release upload "$REL" $f --clobber -R "$GITHUB_REPOSITORY"; done
+          [ -f summary.md ] && cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          true
+      - name: Save status report to the 'status' branch
+        if: always()
+        run: |
+          mkdir -p /tmp/st && cp summary.md /tmp/st/ 2>/dev/null || echo "build failed" > /tmp/st/summary.md
+          cd /tmp/st && git init -q && git checkout -q -b status
+          git config user.name "koneh-ishi-bot" && git config user.email "bot@users.noreply.github.com"
+          git add . && git commit -qm "Data status $(date -u +%F)"
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" status
