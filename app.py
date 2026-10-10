@@ -166,10 +166,18 @@ def send_location_request(to, text):
         "interactive": {"type": "location_request_message", "body": {"text": text},
                         "action": {"name": "send_location"}}})
 
+def sniff_mime(b):
+    if b[:3] == b"\xff\xd8\xff": return "image/jpeg"
+    if b[:8] == b"\x89PNG\r\n\x1a\n": return "image/png"
+    if b[:4] == b"RIFF" and b[8:12] == b"WEBP": return "image/webp"
+    if b[:3] == b"GIF": return "image/gif"
+    return "unsupported"
+
 def download_media(media_id):
     if media_id.startswith("tg:"):
         fp = tg_call("getFile", {"file_id": media_id[3:]})["result"]["file_path"]
-        return urllib.request.urlopen(f"https://api.telegram.org/file/bot{TG_TOKEN}/{fp}", timeout=30).read(), "image/jpeg"
+        data = urllib.request.urlopen(f"https://api.telegram.org/file/bot{TG_TOKEN}/{fp}", timeout=30).read()
+        return data, sniff_mime(data)
     meta = json.load(urllib.request.urlopen(urllib.request.Request(f"{GRAPH}/{media_id}",
                      headers={"Authorization": f"Bearer {TOKEN}"}), timeout=20))
     data = urllib.request.urlopen(urllib.request.Request(meta["url"], headers={"Authorization": f"Bearer {TOKEN}"}), timeout=30).read()
@@ -186,11 +194,37 @@ def claude_json(prompt, image=None, mime="image/jpeg"):
     req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=json.dumps(body).encode(),
         headers={"x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"})
     try:
-        txt = json.load(urllib.request.urlopen(req, timeout=90))["content"][0]["text"]
-        m = re.search(r"[\[{].*[\]}]", txt, re.S)
-        return json.loads(m.group(0)) if m else None
+        res = json.load(urllib.request.urlopen(req, timeout=90))
+        txt = "".join(b.get("text", "") for b in res.get("content", []) if b.get("type") == "text")
+    except urllib.error.HTTPError as e:
+        print("Claude error", e.code, e.read()[:500], flush=True); return None
     except Exception as e:
-        print("Claude error", e); return None
+        print("Claude error", e, flush=True); return None
+    m = re.search(r"[\[{].*[\]}]", txt, re.S)
+    try:
+        out = json.loads(m.group(0)) if m else None
+    except Exception:
+        out = None
+    if isinstance(out, dict):  # לפעמים חוזר {"items": [...]}
+        out = next((v for v in out.values() if isinstance(v, list)), out)
+    if out is None: print("Claude: no JSON in reply:", txt[:300], flush=True)
+    return out
+
+RECEIPT_PROMPT = ('Extract the purchased products from this Israeli supermarket receipt or shopping list. Skip store name, dates, totals (סה"כ), '
+                  'discounts (הנחה), deposits (פיקדון), bags (שקית), payment, change and VAT lines, and prices. Reply with only a JSON array like '
+                  '[{"name":"חלב 3% 1 ליטר","qty":2}] — "name" in Hebrew as written, "qty" = number of units (from ×2 / x2 / 2 יח), '
+                  'or kilograms for weighed produce if shown; default 1.')
+
+def extract_items(image=None, mime="image/jpeg", text=None):
+    items = claude_json(RECEIPT_PROMPT + ("\n\n" + text if text else ""), image, mime)
+    if not isinstance(items, list): return None
+    out = []
+    for x in items:
+        if not isinstance(x, dict) or not str(x.get("name", "")).strip(): continue
+        try: q = float(x.get("qty") or 1)
+        except Exception: q = 1
+        out.append({"name": str(x["name"]).strip(), "qty": q if 0 < q < 100 else 1})
+    return out
 
 # ---------- התאמת מוצרים ----------
 def item_of(d, i, qty, src=None):
@@ -235,11 +269,18 @@ def weekly_items(f):
     return [item_of(d, i, max(.5, round(q * f * 2) / 2) if d.items[i][0].startswith("P") or "לק\"ג" in d.items[i][1] else max(1, round(q * f)))
             for i, q in _weekly["L"]]
 
+SKIP_LINE = re.compile(r'סה"?״?כ|סה״כ|לתשלום|מע"?מ|עודף|אשראי|מזומן|קבלה|חשבונית|הנחה|פיקדון|שקית|^\d{1,2}[/.]\d{1,2}[/.]\d{2,4}$')
+
 def parse_list(text):
     out = []
     for s in re.split(r"[\n,،]+", text):
         s = s.strip()
-        if not s: continue
+        if not s or SKIP_LINE.search(s): continue
+        s = re.sub(r"\s*₪?\s*\d+\.\d{2}\s*₪?$", "", s).strip()          # מחיר בסוף שורה
+        mx = re.search(r"\s*[×xX\*]\s*(\d+(?:\.\d+)?)\s*$", s)            # ×2 בסוף
+        if mx:
+            out.append({"name": s[:mx.start()].strip(), "qty": float(mx.group(1))}); continue
+        if not re.search(r"[א-תA-Za-z]", s): continue
         m = re.match(r'^(\d+(?:\.\d+)?)\s*(ק"ג|קג|קילו)?\s+(.+)$', s) or re.match(r'^(.+?)\s+(\d+(?:\.\d+)?)\s*(ק"ג|קג|קילו)?$', s)
         if not m: out.append({"name": s, "qty": 1})
         elif m.group(1)[0].isdigit(): out.append({"name": m.group(3), "qty": float(m.group(1))})
@@ -321,7 +362,13 @@ def compute(u):
                 d = km(home, A["s"]["p"]) + km(A["s"]["p"], B["s"]["p"]) + km(B["s"]["p"], home)
                 t = tot + cost(d)
                 if not split or t < split["tot"]: split = {"A": A, "B": B, "tot": t, "inA": inA, "inB": inB}
-    s = best["s"]; lines = [f"🏆 *הכי משתלם בשבילך:*\n*{s['n']}, {s['a']}*", f"הסל יעלה *₪{best['tot']:.0f}*" + (f" (כולל ₪{best['fuel']:.0f} דלק)" if car and best["fuel"] >= 1 else "")]
+    s = best["s"]; lines = []
+    far_km = km(home, nearest["s"]["p"])
+    if far_km > 25:
+        lines.append(f"⚠️ _עדיין אין לי סניפים באזור שלך – הקרוב ביותר במאגר נמצא במרחק {far_km:.0f} ק\"מ. "
+                     f"בקרוב המאגר יכלול את כל הסניפים בארץ._\n")
+    lines += [f"🏆 *הכי משתלם בשבילך:*\n*{s['n']}, {s['a']}*",
+              f"הסל יעלה *₪{best['sum']:.0f}*" + (f" + ₪{best['fuel']:.0f} דלק = *₪{best['tot']:.0f}*" if car and best["fuel"] >= 1 else "")]
     if best["miss"]: lines.append(f"_{best['miss']} מוצרים לא נמצאו בסניף, וחושבו לפי מחיר ממוצע_")
     if gone: lines.append(f"_לא נמצאו היום במאגר: {', '.join(gone[:5])}_")
     if nearest["s"]["key"] != s["key"] and nearest["tot"] - best["tot"] > 1:
@@ -431,18 +478,26 @@ def handle(msg):
         if not CLAUDE_KEY:
             return send_text(to, "קריאת קבלות עוד לא מופעלת. אפשר לכתוב את הרשימה בהודעה ✍️")
         send_text(to, "קורא את הקבלה… ⏳")
-        img, mime = download_media(msg["image"]["id"])
-        items = claude_json('This is a photo of an Israeli supermarket receipt (or a shopping list). Extract purchased products only; skip totals, discounts (הנחה), '
-                            'deposits (פיקדון), bags (שקית), payment and VAT lines. Reply with only a JSON array like [{"name":"חלב 3% 1 ליטר","qty":2}] — '
-                            '"name" in Hebrew as printed, "qty" = units, or kilograms for weighed produce.', img, mime)
-        if not isinstance(items, list) or not items:
+        try:
+            img, mime = download_media(msg["image"]["id"])
+        except Exception as e:
+            print("media download error", e, flush=True)
+            return send_text(to, "לא הצלחתי להוריד את התמונה 🙁 נסה לשלוח שוב.")
+        print("image bytes", len(img), mime, flush=True)
+        if mime == "unsupported":
+            return send_text(to, "את סוג הקובץ הזה אני לא יודע לקרוא 🙁 שלחו את הקבלה כ*תמונה* רגילה (לא כקובץ).")
+        items = extract_items(img, mime)
+        if not items:
             return send_text(to, "לא הצלחתי לקרוא את הקבלה. נסה תמונה חדה יותר, או כתוב רשימה.")
         if not pr.get("home"): u["step"] = "loc"
-        return got_items(to, u, [{"name": str(x.get("name", "")), "qty": float(x.get("qty") or 1)} for x in items if x.get("name")])
+        return got_items(to, u, items)
     if text:
         if not all(k in pr for k in ("home", "mode", "maxMin", "splitMin")):
             return send_text(to, "בוא נסיים קודם את השאלות 🙂 אפשר ללחוץ על הכפתורים למעלה.")
-        return got_items(to, u, parse_list(text))
+        items = None
+        if CLAUDE_KEY and (text.count("\n") >= 3 or re.search(r"\d+\.\d{2}", text)):
+            items = extract_items(text=text)  # רשימה ארוכה / קבלה מועתקת – Claude מסדר אותה
+        return got_items(to, u, items or parse_list(text))
     send_text(to, "לא הבנתי 🙂 אפשר לשלוח רשימה, קבלה, או לכתוב *הגדרות*.")
 
 
@@ -459,6 +514,9 @@ def tg_to_msg(up):
         return {**base, "type": "location", "location": {"latitude": m["location"]["latitude"], "longitude": m["location"]["longitude"]}}
     if "photo" in m:
         return {**base, "type": "image", "image": {"id": "tg:" + m["photo"][-1]["file_id"]}}
+    doc = m.get("document") or {}
+    if str(doc.get("mime_type", "")).startswith("image/"):  # תמונה שנשלחה כ"קובץ"
+        return {**base, "type": "image", "image": {"id": "tg:" + doc["file_id"], "mime": doc["mime_type"]}}
     if "text" in m:
         return {**base, "type": "text", "text": {"body": m["text"]}}
     return {**base, "type": "unknown"}

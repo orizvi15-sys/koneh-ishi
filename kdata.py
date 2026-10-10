@@ -20,7 +20,12 @@ def toks(s):
 
 def stem(w):
     """גזירה גסה של רבים/נקבה בעברית: עגבניות→עגבני, ביצים→ביצ"""
-    return re.sub(r"(יות|ות|ים|ייה|יה|ה|י)$", "", w) if len(w) > 3 and not w.isdigit() else w
+    if len(w) > 3 and not w.isdigit():
+        w = re.sub(r"(יות|ות|ים|ייה|יה|ה|י)$", "", w)
+    return w.translate(FINALS)
+
+
+FINALS = str.maketrans("ךםןףץ", "כמנפצ")
 
 
 class Data:
