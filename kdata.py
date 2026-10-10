@@ -9,7 +9,7 @@ from collections import OrderedDict, defaultdict
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_URL = os.environ.get("DATA_URL", "https://github.com/orizvi15-sys/koneh-ishi/releases/download/data-latest/koneh-data.bin")
 CACHE_FILE = os.environ.get("DATA_CACHE", "/tmp/koneh-data.bin")
-REFRESH_HOURS = float(os.environ.get("DATA_REFRESH_HOURS", "4"))
+REFRESH_HOURS = float(os.environ.get("DATA_REFRESH_HOURS", "1"))
 
 
 def toks(s):
