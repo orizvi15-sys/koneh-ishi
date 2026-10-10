@@ -273,15 +273,42 @@ def load_cities(path="tools/cities.json"):
     except Exception: return {}
 
 
-def scrape(chain, dump):
+def _scrape_once(chain, dump, when=None):
     from il_supermarket_scarper import ScarpingTask
     t = ScarpingTask(enabled_scrapers=[chain], files_types=["STORE_FILE", "PRICE_FULL_FILE", "PROMO_FULL_FILE"],
-                     multiprocessing=1, timeout_in_seconds=110 * 60,
+                     multiprocessing=1, timeout_in_seconds=55 * 60,
                      output_configuration={"output_mode": "disk", "base_storage_path": dump},
                      status_configuration={"database_type": "json", "base_path": dump + "/status"})
-    t.start(); t.join()
+    t.start(when_date=when) if when else t.start(); t.join()
+
+
+def _files(dump):
     return [f for f in glob.glob(dump + "/**/*", recursive=True)
             if os.path.isfile(f) and "/status" not in f and not f.endswith(".json")]
+
+
+def _is_price(f):
+    b = os.path.basename(f).lower()
+    return "pricefull" in b or "price_full" in b
+
+
+def scrape(chain, dump):
+    _scrape_once(chain, dump)
+    files = _files(dump)
+    # בשעות הלילה חלק מהרשתות עוד לא פרסמו את קבצי היום – משלימים מאתמול
+    n_price = len({re.sub(r"-\d{8,}.*", "", os.path.basename(f)) for f in files if _is_price(f)})
+    n_stores = 0
+    for f in files:
+        if "store" in os.path.basename(f).lower() and not _is_price(f):
+            try: n_stores = max(n_stores, len(parse_stores(parse_xml(read_any(f)), {})))
+            except Exception: pass
+    if n_price < max(5, 0.6 * n_stores):
+        y = datetime.now(IL).replace(tzinfo=None, hour=12, minute=0) - timedelta(days=1)
+        print(f"{chain}: only {n_price} price files (stores listed: {n_stores}) – adding yesterday's files", flush=True)
+        try: _scrape_once(chain, dump + "_y", when=y)
+        except Exception as ex: print("yesterday scrape error", ex)
+        files += _files(dump + "_y")
+    return files
 
 
 def main():
