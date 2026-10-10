@@ -32,7 +32,9 @@ DRY_RUN = os.environ.get("DRY_RUN") == "1"  # לבדיקות: מדפיס במק�
 # ---------- נתונים ----------
 import kdata  # הנתונים הארציים – kdata.D הוא תמיד הגרסה העדכנית
 FUEL, KM_PER_L, ROAD, CAR_KMH, WALK_KMH, PARK_MIN = 7.77, 13, 1.3, 28, 4.5, 3
-MAX_POOL = 25  # כמה סניפים קרובים לכל היותר נבדקים בכל חישוב
+MAX_POOL = 25
+SPLIT_MIN = 40          # מציעים לפצל בין שני סופרים רק אם חוסכים יותר מ-₪40
+BUS_KMH, BUS_WAIT = 15, 10  # כמה סניפים קרובים לכל היותר נבדקים בכל חישוב
 WEEKLY = [["חלב 3% בקרטון 2 ליטר", 2], ["גבינת קוטג 5% 250 גרם", 2], ["לחם אחיד פרוס 900 גר פיקוח אנג`ל", 2],
           ["גבינה צהובה נעם דק דק 22% 200 גר", 1], ["שמן עץ הזית קנולה 1 ליטר בריאות מהטבע", 1], ["אורז בסמטי קלאסי 1 קג סוגת", 1],
           ["פסטה ספגטי מס 8 אסם 500ג", 2], ["טחינה אמיתית 400 גרם צבר", 1], ["במבה חטיף בוטנים 200 גרם", 1], ["פפסי קולה 1.5 ליטר.", 2],
@@ -152,10 +154,12 @@ def send_text(to, text):
 def send_buttons(to, text, buttons):  # buttons: [(id, title<=20)] up to 3
     if is_tg(to):
         return tg_call("sendMessage", {"chat_id": to[3:], "text": tg_html(text), "parse_mode": "HTML",
-                        "reply_markup": {"inline_keyboard": [[{"text": tt, "callback_data": i}] for i, tt in buttons]}})
+                        "reply_markup": {"inline_keyboard": [[{"text": tt, "callback_data": i} for i, tt in buttons[k:k + 2]]
+                                                             for k in range(0, len(buttons), 2)] if len(buttons) > 3 else
+                                                            [[{"text": tt, "callback_data": i}] for i, tt in buttons]}})
     graph_post(f"{PHONE_ID}/messages", {"messaging_product": "whatsapp", "to": to, "type": "interactive",
         "interactive": {"type": "button", "body": {"text": text[:1024]},
-                        "action": {"buttons": [{"type": "reply", "reply": {"id": i, "title": t[:20]}} for i, t in buttons]}}})
+                        "action": {"buttons": [{"type": "reply", "reply": {"id": i, "title": t[:20]}} for i, t in buttons[:3]]}}})
 
 def send_location_request(to, text):
     if is_tg(to):
@@ -309,9 +313,10 @@ def km(a, b):
 
 def compute(u):
     D = kdata.D
-    pr = u["prefs"]; home = pr["home"]; car = pr["mode"] == "car"
+    pr = u["prefs"]; home = pr["home"]; car = pr["mode"] == "car"; bus = pr["mode"] == "bus"
+    split_min = -1 if pr.get("splitMin", SPLIT_MIN) < 0 else SPLIT_MIN
     cost = lambda d: d * FUEL / KM_PER_L if car else 0
-    mins = lambda d: d / CAR_KMH * 60 + PARK_MIN if car else d / WALK_KMH * 60
+    mins = lambda d: d / CAR_KMH * 60 + PARK_MIN if car else (d / BUS_KMH * 60 + BUS_WAIT if bus else d / WALK_KMH * 60)
     items, gone = [], []
     for it in u["items"]:
         i = resolve(D, it)
@@ -349,7 +354,7 @@ def compute(u):
     if close:
         best = min(close, key=lambda r: r["d"]); ranked.remove(best); ranked.insert(0, best)
     split = None
-    if pr["splitMin"] >= 0:
+    if split_min >= 0:
         for a in range(len(pool)):
             for b in range(a + 1, len(pool)):
                 A, B = pool[a], pool[b]; tot = 0; inA, inB = [], []; ok = True
@@ -373,10 +378,10 @@ def compute(u):
     if gone: lines.append(f"_לא נמצאו היום במאגר: {', '.join(gone[:5])}_")
     if nearest["s"]["key"] != s["key"] and nearest["tot"] - best["tot"] > 1:
         lines.append(f"חוסך *₪{nearest['tot'] - best['tot']:.0f}* לעומת הסופר הכי קרוב אליך ({nearest['s']['n']})")
-    lines.append(f"📍 {round(best['min'])} דקות {'נסיעה' if car else 'הליכה'}")
+    lines.append(f"📍 {round(best['min'])} דקות {'נסיעה' if car else ('בתחבורה ציבורית' if bus else 'הליכה')}")
     lines.append(f"🗺️ ניווט: https://waze.com/ul?ll={s['p'][0]},{s['p'][1]}&navigate=yes")
     msgs = ["\n".join(lines)]
-    if split and best["tot"] - split["tot"] > max(pr["splitMin"], 5):
+    if split and best["tot"] - split["tot"] > split_min:
         A, B = split["A"]["s"], split["B"]["s"]
         msgs.append(f"💡 אם מתחלקים בין *{A['n']}* ({A['a']}) ל*{B['n']}* ({B['a']}) חוסכים עוד *₪{best['tot'] - split['tot']:.0f}*.\n\n"
                     f"*ב{A['n']}:* {', '.join(split['inA'][:15])}\n\n*ב{B['n']}:* {', '.join(split['inB'][:15])}")
@@ -385,7 +390,9 @@ def compute(u):
     return msgs
 
 # ---------- שיחה ----------
-WELCOME = "*קונה אישי 🛒*\nהיי! אני אעזור לך לחסוך בקניות בסופר.\n4 שאלות קצרות ומתחילים 👇"
+WELCOME = "*קונה אישי 🛒*\nהיי{name}! אני אעזור לך לחסוך בקניות בסופר.\n5 שאלות קצרות (כ-20 שניות) ומתחילים 👇"
+def welcome(u): return WELCOME.format(name=" " + u["name"] if u.get("name") else "")
+PROFILE_KEYS = ("home", "mode", "maxMin", "splitMin")
 GREET = re.compile(r"^\W*(הי+|שלום|אהלן|הלו|יו|מה קורה|מה נשמע|מה המצב|מה הולך|מה איתך|בוקר טוב|ערב טוב|צהריים טובים|hi+|hey|hello|start)\b[^,\n]*$", re.I)
 
 def ask(to, step, u, intro=""):
@@ -393,9 +400,14 @@ def ask(to, step, u, intro=""):
     if step == "loc":
         send_location_request(to, "*1️⃣ מאיפה יוצאים לקניות?*\nלוחצים על הכפתור ושולחים מיקום 📍")
     elif step == "mode":
-        send_buttons(to, "*2️⃣ איך מגיעים לסופר?*", [("car", "🚗 ברכב"), ("walk", "🚶 ברגל / אוטובוס")])
+        send_buttons(to, "*2️⃣ איך מגיעים לסופר?*", [("car", "🚗 ברכב"), ("walk", "🚶 ברגל"), ("bus", "🚌 תחבורה ציבורית")])
     elif step == "range":
         send_buttons(to, "*3️⃣ כמה רחוק שווה לך לנסוע כדי לחסוך?*", [("r5", "עד 5 דקות"), ("r15", "עד 15 דקות"), ("rall", "לא משנה")])
+    elif step == "hh":
+        send_buttons(to, "*4️⃣ כמה אנשים בבית?*", [("hh12", "1–2"), ("hh34", "3–4"), ("hh5", "5+")])
+    elif step == "brand":
+        send_buttons(to, "*5️⃣ כשאתה כותב \"חלב\" – מה חשוב לך?*",
+                     [("bmine", "המותג שאני רגיל אליו"), ("bcheap", "הכי זול מאותו סוג"), ("bdep", "תלוי במוצר")])
     elif step == "split":
         send_buttons(to, "*4️⃣ מוכן לקנות בשני סופרים אם חוסכים?*", [("s0", "כן"), ("s30", "רק אם מעל ₪30"), ("sno", "לא, סופר אחד")])
     elif step == "basket":
@@ -411,6 +423,61 @@ def finish(to, u):
     u["hist"] = (u["hist"] + [{"d": int(time.time()), "items": [{"code": x.get("code", ""), "name": x["name"], "qty": x["qty"]} for x in u["items"]]}])[-12:]
     u["step"] = "done"; save_users()
     send_text(to, "שמרתי את הקנייה כדי ללמוד את ההרגלים שלך 🙂\nמתי שרוצים – פשוט כותבים *היי*, שולחים קבלה או רשימה, ואבדוק שוב. לשינוי הגדרות כתוב *הגדרות*.")
+    pr = u["prefs"]; n = len(u["hist"])
+    if n >= 1 and "clubs" not in pr:                       # אחרי הקנייה הראשונה
+        pr["clubs"] = []; return ask_clubs(to, u, first=True)
+    if n >= 2 and "kosher" not in pr and is_tg(to):        # אחרי הקנייה השנייה
+        pr["kosher"] = "?"; save_users()
+        return send_buttons(to, "עוד שאלה קטנה 🙂 *יש העדפת כשרות?*", [("kreg", "רגיל"), ("kmeh", "מהדרין בלבד")])
+
+# ---------- תזכורת שבועית ----------
+# קבלה שנסרקה ביום ובשעה מסוימים => תזכורת שבוע אחרי, שעתיים לפני אותה שעה (לא בלילה).
+try:
+    from zoneinfo import ZoneInfo
+    IL_TZ = ZoneInfo("Asia/Jerusalem")
+except Exception:
+    from datetime import timezone as _tz, timedelta as _td
+    IL_TZ = _tz(_td(hours=3))
+from datetime import datetime as _dt
+
+def next_reminder(ts):
+    t = _dt.fromtimestamp(ts + 7 * 86400 - 2 * 3600, IL_TZ)
+    if t.hour < 8: t = t.replace(hour=8, minute=0, second=0)
+    elif t.hour >= 21: t = t.replace(hour=20, minute=0, second=0)
+    return int(t.timestamp())
+
+def send_reminder(to, u):
+    name = u.get("name", "")
+    u["step"] = "basket"
+    btns = [("mine", "🛒 הסל הקבוע שלי"), ("cam", "📷 צילום קבלה"), ("remind_off", "בלי תזכורות")]
+    send_buttons(to, f"היי{' ' + name if name else ''} 👋\nבדרך כלל אתה עושה קנייה בערך בזמן הזה.\n"
+                     f"רוצה שאבדוק איפה הכי משתלם השבוע?", btns)
+
+def _reminder_loop():
+    while True:
+        time.sleep(60)
+        now = time.time()
+        for to, u in list(USERS.items()):
+            try:
+                ra = u.get("remind_at")
+                if not ra or ra > now or u.get("prefs", {}).get("remind_off") or not is_tg(to): continue
+                if now - ra > 6 * 3600:          # פספסנו (השרת היה כבוי) – לא שולחים באיחור גדול
+                    u["remind_at"] = ra + 7 * 86400; continue
+                send_reminder(to, u)
+                u["remind_miss"] = u.get("remind_miss", 0) + 1
+                u["remind_at"] = ra + 7 * 86400 if u["remind_miss"] < 3 else None   # 3 תזכורות בלי תגובה – מפסיקים
+                save_users()
+            except Exception as ex:
+                print("reminder error", to, ex, flush=True)
+
+CLUBS = ["שופרסל", "רמי לוי", "יוחננוף", "אושר עד", "ויקטורי", "טיב טעם"]
+def ask_clubs(to, u, first=False):
+    have = u["prefs"].get("clubs", [])
+    btns = [(f"club:{c}", ("✅ " if c in have else "") + c) for c in CLUBS] + [("club:done" if have else "club:none", "סיימתי" if have else "אף אחד")]
+    u["step"] = "clubs"; save_users()
+    head = ("שאלה אחרונה ונעלם 🙂 *באיזה מועדוני לקוחות אתה חבר?*\nאפשר לבחור כמה, ובסוף ללחוץ סיימתי." if first
+            else "עוד מועדון? כשמסיימים לוחצים *סיימתי*.")
+    return send_buttons(to, head, btns)
 
 def got_items(to, u, items):
     found, missed = match_items(items)
@@ -434,19 +501,21 @@ def handle(msg):
         it = msg["interactive"]; reply = (it.get("button_reply") or it.get("list_reply") or {}).get("id")
     text = msg.get("text", {}).get("body", "").strip() if t == "text" else ""
     print("handle", t, "step", u["step"])
+    if msg.get("name"): u["name"] = msg["name"]
+    u["remind_miss"] = 0
 
     if text == "מחק אותי":
         USERS.pop(to, None); save_users()
         return send_text(to, "מחקתי את כל המידע שלך 🗑️ כדי להתחיל מחדש כתבו היי.")
     if GREET.match(text) and len(text) <= 25:
-        if all(k in pr for k in ("home", "mode", "maxMin", "splitMin")):
+        if all(k in pr for k in PROFILE_KEYS):
             return ask(to, "basket", u, intro=f"היי{' ' + u['name'] if u.get('name') else ''}! 👋 טוב לראות אותך שוב.\n\n")
-        send_text(to, WELCOME); return ask(to, "loc", u)
+        send_text(to, welcome(u)); return ask(to, "loc", u)
     if text in ("הגדרות", "התחל", "מחדש", "/start", "/settings") or u["step"] == "new":
         if u["step"] == "new" and pr.get("home"):
             u["step"] = "keep"; save_users()
-            return send_buttons(to, WELCOME + "\n\nיש לי את ההעדפות שלך מהפעם הקודמת.", [("keep", "להמשיך איתן"), ("reset", "להתחיל מחדש")])
-        send_text(to, WELCOME); return ask(to, "loc", u)
+            return send_buttons(to, welcome(u) + "\n\nיש לי את ההעדפות שלך מהפעם הקודמת.", [("keep", "להמשיך איתן"), ("reset", "להתחיל מחדש")])
+        send_text(to, welcome(u)); return ask(to, "loc", u)
     if reply == "keep": return ask(to, "basket", u)
     if reply == "reset": u["prefs"] = {}; return ask(to, "loc", u)
 
@@ -458,9 +527,27 @@ def handle(msg):
         return
     if u["step"] == "loc":
         return send_location_request(to, "כדי לדעת מאיפה אתה יוצא, צריך מיקום 📍 לוחצים על הכפתור:")
-    if reply in ("car", "walk"): pr["mode"] = reply; return ask(to, "range", u)
-    if reply in ("r5", "r15", "rall"): pr["maxMin"] = {"r5": 6, "r15": 16, "rall": 999}[reply]; return ask(to, "split", u)
-    if reply in ("s0", "s30", "sno"): pr["splitMin"] = {"s0": 0, "s30": 30, "sno": -1}[reply]; return ask(to, "basket", u)
+    if reply in ("car", "walk", "bus"): pr["mode"] = reply; return ask(to, "range", u)
+    if reply in ("r5", "r15", "rall"): pr["maxMin"] = {"r5": 6, "r15": 16, "rall": 999}[reply]; return ask(to, "hh", u)
+    if reply in HH and u["step"] == "hh": pr["hh"] = reply; return ask(to, "brand", u)
+    if reply in ("bmine", "bcheap", "bdep"):
+        pr["brand"] = reply[1:]; pr.setdefault("splitMin", SPLIT_MIN); pr.pop("remind_off", None)
+        return ask(to, "basket", u, intro="מעולה, סיימנו 🎉\n\n")
+    if reply in ("s0", "s30", "sno"): pr["splitMin"] = {"s0": SPLIT_MIN, "s30": SPLIT_MIN, "sno": -1}[reply]; return ask(to, "basket", u)
+    if reply and reply.startswith("club:"):
+        c = reply[5:]
+        if c == "done" or c == "none":
+            if c == "none": pr["clubs"] = []
+            u["step"] = "done"; save_users()
+            return send_text(to, "תודה! רשמתי 👍" + (f" (מועדונים: {', '.join(pr['clubs'])})" if pr.get("clubs") else ""))
+        pr.setdefault("clubs", [])
+        if c not in pr["clubs"]: pr["clubs"].append(c)
+        save_users(); return ask_clubs(to, u)
+    if reply in ("kreg", "kmeh"):
+        pr["kosher"] = reply[1:]; save_users(); return send_text(to, "רשמתי 👍")
+    if reply == "remind_off":
+        pr["remind_off"] = True; u.pop("remind_at", None); save_users()
+        return send_text(to, "בסדר, לא אשלח יותר תזכורות 👍 (כדי להפעיל שוב – כתבו *הגדרות*)")
     if reply == "mine":
         L = learned(u); u["items"] = [{k: x[k] for k in ("src", "code", "name", "qty")} for x in L]
         send_text(to, "*הסל הקבוע שלך:*\n" + "\n".join(f"• {x['name']}" + (f" ×{x['qty']:g}" if x["qty"] != 1 else "") for x in L[:15]))
@@ -469,10 +556,11 @@ def handle(msg):
         u["step"] = "basket"; save_users(); return send_text(to, "צלם את הקבלה (או רשימה כתובה) ושלח כאן 📷")
     if reply == "list":
         u["step"] = "basket"; save_users(); return send_text(to, "כתוב מה קונים, למשל:\n_2 חלב, לחם, קוטג', 1.5 קג עגבניות_")
-    if reply == "weekly":
-        u["step"] = "hh"; save_users(); return send_buttons(to, "*לכמה אנשים?*", [("hh12", "1–2"), ("hh34", "3–4"), ("hh5", "5+")])
+    if reply == "weekly" and pr.get("hh"): reply = pr["hh"]
+    elif reply == "weekly":
+        u["step"] = "hhw"; save_users(); return send_buttons(to, "*לכמה אנשים?*", [("hh12", "1–2"), ("hh34", "3–4"), ("hh5", "5+")])
     if reply in HH:
-        f = HH[reply]
+        pr.setdefault("hh", reply); f = HH[reply]
         u["items"] = weekly_items(f)
         send_text(to, f"הכנתי סל שבועי רגיל: {len(u['items'])} מוצרים (חלב, לחם, גבינות, ירקות, פירות ועוד)."); return finish(to, u)
     if reply in ("addf", "noadd") and u["step"] == "forgot":
@@ -495,9 +583,10 @@ def handle(msg):
         if not items:
             return send_text(to, "לא הצלחתי לקרוא את הקבלה. נסה תמונה חדה יותר, או כתוב רשימה.")
         if not pr.get("home"): u["step"] = "loc"
+        u["last_receipt"] = int(time.time()); u["remind_at"] = next_reminder(u["last_receipt"]); u["remind_miss"] = 0
         return got_items(to, u, items)
     if text:
-        if not all(k in pr for k in ("home", "mode", "maxMin", "splitMin")):
+        if not all(k in pr for k in PROFILE_KEYS):
             return send_text(to, "בוא נסיים קודם את השאלות 🙂 אפשר ללחוץ על הכפתורים למעלה.")
         items = None
         if CLAUDE_KEY and (text.count("\n") >= 3 or re.search(r"\d+\.\d{2}", text)):
@@ -511,10 +600,10 @@ def tg_to_msg(up):
     if "callback_query" in up:
         cq = up["callback_query"]; tg_call("answerCallbackQuery", {"callback_query_id": cq["id"]})
         return {"from": f"tg:{cq['message']['chat']['id']}", "id": "tgc" + cq["id"], "type": "interactive",
-                "interactive": {"button_reply": {"id": cq.get("data", "")}}}
+                "name": (cq.get("from") or {}).get("first_name", ""), "interactive": {"button_reply": {"id": cq.get("data", "")}}}
     m = up.get("message") or {}
     if not m: return None
-    base = {"from": f"tg:{m['chat']['id']}", "id": f"tg{m['chat']['id']}_{m['message_id']}"}
+    base = {"from": f"tg:{m['chat']['id']}", "id": f"tg{m['chat']['id']}_{m['message_id']}", "name": (m.get("from") or {}).get("first_name", "")}
     if "location" in m:
         return {**base, "type": "location", "location": {"latitude": m["location"]["latitude"], "longitude": m["location"]["longitude"]}}
     if "photo" in m:
@@ -585,6 +674,7 @@ def safe_handle(m):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     kdata.load(force_download=os.environ.get("DATA_URL", "x") != ""); kdata.start_refresher()
+    threading.Thread(target=_reminder_loop, daemon=True).start()
     import signal
     def _bye(*_):  # Render שולח SIGTERM לפני עדכון – שומרים את הזיכרון לפני שיוצאים
         if _dirty.is_set(): push_users()
