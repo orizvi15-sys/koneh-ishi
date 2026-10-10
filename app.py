@@ -444,4 +444,16 @@ if __name__ == "__main__":
             print("חיבור טלגרם נכשל:", ex)
     elif not TG_TOKEN:
         print("אזהרה: TELEGRAM_TOKEN לא מוגדר")
+    WABA_ID = os.environ.get("WABA_ID", "1510874674181761")
+    if TOKEN and WABA_ID:
+        for method, path in (("POST", f"/{WABA_ID}/subscribed_apps"), ("GET", f"/{WABA_ID}/subscribed_apps"),
+                             ("GET", f"/{PHONE_ID}?fields=display_phone_number,status,code_verification_status,platform_type")):
+            try:
+                rq = urllib.request.Request(GRAPH + path, data=b"" if method == "POST" else None, method=method,
+                                            headers={"Authorization": "Bearer " + TOKEN})
+                print("WA setup", method, path.split("?")[0], urllib.request.urlopen(rq, timeout=20).read()[:400])
+            except urllib.error.HTTPError as e:
+                print("WA setup error", method, path.split("?")[0], e.code, e.read()[:400])
+            except Exception as e:
+                print("WA setup error", method, path, e)
     ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()
