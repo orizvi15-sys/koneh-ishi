@@ -30,10 +30,9 @@ PUBLIC_URL = os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL
 DRY_RUN = os.environ.get("DRY_RUN") == "1"  # לבדיקות: מדפיס במקום לשלוח
 
 # ---------- נתונים ----------
-PRODS = json.load(open(os.path.join(HERE, "data", "prices.json"), encoding="utf-8"))  # [name, [price per store], isProduce]
-BY = {p[0]: p for p in PRODS}
-STORES = json.load(open(os.path.join(HERE, "data", "stores.json"), encoding="utf-8"))
+import kdata  # הנתונים הארציים – kdata.D הוא תמיד הגרסה העדכנית
 FUEL, KM_PER_L, ROAD, CAR_KMH, WALK_KMH, PARK_MIN = 7.77, 13, 1.3, 28, 4.5, 3
+MAX_POOL = 25  # כמה סניפים קרובים לכל היותר נבדקים בכל חישוב
 WEEKLY = [["חלב 3% בקרטון 2 ליטר", 2], ["גבינת קוטג 5% 250 גרם", 2], ["לחם אחיד פרוס 900 גר פיקוח אנג`ל", 2],
           ["גבינה צהובה נעם דק דק 22% 200 גר", 1], ["שמן עץ הזית קנולה 1 ליטר בריאות מהטבע", 1], ["אורז בסמטי קלאסי 1 קג סוגת", 1],
           ["פסטה ספגטי מס 8 אסם 500ג", 2], ["טחינה אמיתית 400 גרם צבר", 1], ["במבה חטיף בוטנים 200 גרם", 1], ["פפסי קולה 1.5 ליטר.", 2],
@@ -138,41 +137,47 @@ def claude_json(prompt, image=None, mime="image/jpeg"):
         print("Claude error", e); return None
 
 # ---------- התאמת מוצרים ----------
-def toks(s):
-    s = re.sub(r"[׳'\"`.\-–_/()*%]", " ", s)
-    return [w for w in s.split() if len(w) > 1]
-PIDX = [(p, set(toks(p[0])), sum(x is not None for x in p[1])) for p in PRODS]
-
-def candidates(name, n=6):
-    q = toks(name)
-    if not q: return []
-    out = []
-    for p, t, avail in PIDX:
-        s = 0
-        for w in q:
-            if w in t: s += 2
-            elif any(x.startswith(w) or w.startswith(x) for x in t): s += 1
-        if p[2] and len(q) <= 2: s += 1
-        sc = s / (len(q) + 0.3 * len(t)) + avail / 200
-        if sc > 0.4: out.append((sc, p[0]))
-    return [x[1] for x in sorted(out, reverse=True)[:n]]
+def item_of(d, i, qty, src=None):
+    c, n = d.items[i][0], d.items[i][1]
+    return {"src": src or n, "code": c, "name": n, "qty": qty}
 
 def match_items(items):
-    cand = [candidates(it["name"]) for it in items]
+    d = kdata.D
+    cand = [d.search(it["name"]) for it in items]
     picks = [c[0] if c else None for c in cand]
     if CLAUDE_KEY and any(len(c) > 1 for c in cand):
         res = claude_json("Match each Israeli supermarket item to the option that is the SAME product (type, brand if given, similar size). "
                           "If none fits, null. Reply only a JSON array like [{\"i\":0,\"pick\":2}].\n\n" +
-                          json.dumps([{"i": i, "item": it["name"], "options": cand[i]} for i, it in enumerate(items)], ensure_ascii=False))
+                          json.dumps([{"i": i, "item": it["name"], "options": [d.items[k][1] for k in cand[i]]} for i, it in enumerate(items)], ensure_ascii=False))
         if isinstance(res, list):
             for r in res:
                 try:
                     i = int(r["i"]); k = r.get("pick")
                     picks[i] = None if k is None or not cand[i] or int(k) >= len(cand[i]) else cand[i][int(k)]
                 except Exception: pass
-    found = [{"src": it["name"], "name": picks[i], "qty": it["qty"]} for i, it in enumerate(items) if picks[i]]
-    missed = [it["name"] for i, it in enumerate(items) if not picks[i]]
+    found = [item_of(d, picks[i], it["qty"], it["name"]) for i, it in enumerate(items) if picks[i] is not None]
+    missed = [it["name"] for i, it in enumerate(items) if picks[i] is None]
     return found, missed
+
+def resolve(d, it):
+    """אינדקס המוצר בגרסת הנתונים הנוכחית (לפי ברקוד, ואם אין – לפי שם)"""
+    i = d.code2i.get(it.get("code", ""))
+    if i is None: i = d.name2i.get(it.get("name", ""))
+    return i
+
+_weekly = {}
+def weekly_items(f):
+    d = kdata.D
+    if _weekly.get("v") != d.version:
+        L = []
+        for q, n in WEEKLY:
+            i = d.name2i.get(q)
+            if i is None:
+                c = d.search(q, 1); i = c[0] if c else None
+            if i is not None: L.append((i, n))
+        _weekly.clear(); _weekly.update(v=d.version, L=L)
+    return [item_of(d, i, max(.5, round(q * f * 2) / 2) if d.items[i][0].startswith("P") or "לק\"ג" in d.items[i][1] else max(1, round(q * f)))
+            for i, q in _weekly["L"]]
 
 def parse_list(text):
     out = []
@@ -189,13 +194,14 @@ def parse_list(text):
 def learned(u):
     h = u["hist"]
     if not h: return []
-    cnt = {}
+    d = kdata.D; cnt = {}
     for b in h:
         for it in b["items"]:
-            if it["name"] in BY:
-                c = cnt.setdefault(it["name"], [0, 0]); c[0] += 1; c[1] += it["qty"]
+            i = resolve(d, it)
+            if i is not None:
+                c = cnt.setdefault(i, [0, 0]); c[0] += 1; c[1] += it["qty"]
     mn = 1 if len(h) == 1 else max(2, math.ceil(len(h) * 0.4))
-    L = [{"name": k, "src": k, "qty": round(v[1] / v[0] * 2) / 2 or 1, "freq": v[0]} for k, v in cnt.items() if v[0] >= mn]
+    L = [dict(item_of(d, i, round(v[1] / v[0] * 2) / 2 or 1), freq=v[0]) for i, v in cnt.items() if v[0] >= mn]
     return sorted(L, key=lambda x: -x["freq"])
 
 # ---------- חישוב ----------
@@ -204,23 +210,42 @@ def km(a, b):
     h = math.sin(dla / 2) ** 2 + math.cos(r(a[0])) * math.cos(r(b[0])) * math.sin(dlo / 2) ** 2
     return 2 * 6371 * math.asin(math.sqrt(h)) * ROAD
 
-def median_price(name):
-    a = sorted(x for x in BY[name][1] if x is not None); return a[len(a) // 2]
-
 def compute(u):
-    pr = u["prefs"]; home = pr["home"]; car = pr["mode"] == "car"; items = u["items"]
+    D = kdata.D
+    pr = u["prefs"]; home = pr["home"]; car = pr["mode"] == "car"
     cost = lambda d: d * FUEL / KM_PER_L if car else 0
     mins = lambda d: d / CAR_KMH * 60 + PARK_MIN if car else d / WALK_KMH * 60
+    items, gone = [], []
+    for it in u["items"]:
+        i = resolve(D, it)
+        if i is None: gone.append(it["name"])
+        else: items.append(dict(it, i=i))
+    if not items:
+        return ["לא מצאתי אף אחד מהמוצרים במאגר המחירים העדכני 🙁 נסה לכתוב אותם שוב."]
+    near = sorted(((km(home, s["p"]), s) for s in D.stores), key=lambda x: x[0])
+    if not near: return ["אין לי עדיין נתוני סניפים 🙁"]
     rows = []
-    for i, s in enumerate(STORES):
-        d = 2 * km(home, s["p"]); tot = 0; miss = 0
+    for k, (d1, s) in enumerate(near[:MAX_POOL * 2]):
+        if k > 0 and mins(d1) > pr["maxMin"] and len(rows) >= 1: break
+        rows.append({"s": s, "d": 2 * d1, "min": mins(d1), "P": D.prices(s["blob"])})
+        if len(rows) >= MAX_POOL: break
+    # חציון מקומי למוצרים שחסרים בסניף מסוים
+    med = {}
+    for it in items:
+        v = sorted(r["P"][it["i"]] for r in rows if it["i"] in r["P"])
+        med[it["i"]] = v[len(v) // 2] if v else D.items[it["i"]][3] / 100
+    for r in rows:
+        tot = 0; miss = 0
         for it in items:
-            p = BY[it["name"]][1][i]
-            if p is None: miss += 1; p = median_price(it["name"])
+            p = r["P"].get(it["i"])
+            if p is None: miss += 1; p = med[it["i"]]
             tot += p * it["qty"]
-        rows.append({"i": i, "s": s, "d": d, "min": mins(d / 2), "sum": tot, "fuel": cost(d), "tot": tot + cost(d), "miss": miss})
-    nearest = min(rows, key=lambda r: r["d"])
+        r.update(sum=tot, fuel=cost(r["d"]), tot=tot + cost(r["d"]), miss=miss)
+    nearest = rows[0]
     pool = [r for r in rows if r["min"] <= pr["maxMin"]] or [nearest]
+    # סניף שחסרים בו הרבה מהמוצרים לא באמת עונה על הסל
+    full = [r for r in pool if r["miss"] <= max(1, 0.2 * len(items))]
+    if full: pool = full
     ranked = sorted(pool, key=lambda r: r["tot"]); best = ranked[0]
     # לא שולחים רחוק בשביל חיסכון זניח: אם סניף קרוב יותר כמעט באותו מחיר – ממליצים עליו
     close = [r for r in ranked if r["tot"] - best["tot"] < max(5, 0.03 * best["sum"]) and r["min"] <= best["min"] - 3]
@@ -232,7 +257,7 @@ def compute(u):
             for b in range(a + 1, len(pool)):
                 A, B = pool[a], pool[b]; tot = 0; inA, inB = [], []; ok = True
                 for it in items:
-                    pa, pb = BY[it["name"]][1][A["i"]], BY[it["name"]][1][B["i"]]
+                    pa, pb = A["P"].get(it["i"]), B["P"].get(it["i"])
                     if pa is None and pb is None: ok = False; break
                     if pb is None or (pa is not None and pa <= pb): tot += pa * it["qty"]; inA.append(it["name"])
                     else: tot += pb * it["qty"]; inB.append(it["name"])
@@ -242,7 +267,8 @@ def compute(u):
                 if not split or t < split["tot"]: split = {"A": A, "B": B, "tot": t, "inA": inA, "inB": inB}
     s = best["s"]; lines = [f"🏆 *הכי משתלם בשבילך:*\n*{s['n']}, {s['a']}*", f"הסל יעלה *₪{best['tot']:.0f}*" + (f" (כולל ₪{best['fuel']:.0f} דלק)" if car and best["fuel"] >= 1 else "")]
     if best["miss"]: lines.append(f"_{best['miss']} מוצרים לא נמצאו בסניף, וחושבו לפי מחיר ממוצע_")
-    if nearest["i"] != best["i"] and nearest["tot"] - best["tot"] > 1:
+    if gone: lines.append(f"_לא נמצאו היום במאגר: {', '.join(gone[:5])}_")
+    if nearest["s"]["key"] != s["key"] and nearest["tot"] - best["tot"] > 1:
         lines.append(f"חוסך *₪{nearest['tot'] - best['tot']:.0f}* לעומת הסופר הכי קרוב אליך ({nearest['s']['n']})")
     lines.append(f"📍 {round(best['min'])} דקות {'נסיעה' if car else 'הליכה'}")
     lines.append(f"🗺️ ניווט: https://waze.com/ul?ll={s['p'][0]},{s['p'][1]}&navigate=yes")
@@ -251,7 +277,8 @@ def compute(u):
         A, B = split["A"]["s"], split["B"]["s"]
         msgs.append(f"💡 אם מתחלקים בין *{A['n']}* ({A['a']}) ל*{B['n']}* ({B['a']}) חוסכים עוד *₪{best['tot'] - split['tot']:.0f}*.\n\n"
                     f"*ב{A['n']}:* {', '.join(split['inA'][:15])}\n\n*ב{B['n']}:* {', '.join(split['inB'][:15])}")
-    msgs.append("כל הסופרים בטווח:\n" + "\n".join(f"{'✅' if k == 0 else '▫️'} {r['s']['n']} · {r['s']['a']} – ₪{r['tot']:.0f} ({round(r['min'])} דק')" for k, r in enumerate(ranked[:8])))
+    msgs.append("כל הסופרים בטווח:\n" + "\n".join(f"{'✅' if k == 0 else '▫️'} {r['s']['n']} · {r['s']['a']} – ₪{r['tot']:.0f} ({round(r['min'])} דק')" for k, r in enumerate(ranked[:8]))
+                + (f"\n\n_מחירים ומבצעים מעודכנים ל-{D.built[8:10]}/{D.built[5:7]} {D.built[11:16]}_" if len(D.built) >= 16 else ""))
     return msgs
 
 # ---------- שיחה ----------
@@ -277,7 +304,7 @@ def ask(to, step, u):
 
 def finish(to, u):
     for m in compute(u): send_text(to, m)
-    u["hist"] = (u["hist"] + [{"d": int(time.time()), "items": [{"name": x["name"], "qty": x["qty"]} for x in u["items"]]}])[-12:]
+    u["hist"] = (u["hist"] + [{"d": int(time.time()), "items": [{"code": x.get("code", ""), "name": x["name"], "qty": x["qty"]} for x in u["items"]]}])[-12:]
     u["step"] = "done"; save_users()
     send_text(to, "שמרתי את הקנייה כדי ללמוד את ההרגלים שלך 🙂\nמתי שרוצים – שולחים קבלה או רשימה ואבדוק שוב. לשינוי הגדרות כתוב *הגדרות*.")
 
@@ -287,8 +314,8 @@ def got_items(to, u, items):
     if missed: msg += "\nלא נמצאו: " + ", ".join(missed[:8])
     send_text(to, msg)
     if not found: return
-    have = {x["name"] for x in found}
-    forgot = [x for x in learned(u) if x["name"] not in have and x["freq"] >= 2][:5]
+    have = {x["code"] for x in found}
+    forgot = [x for x in learned(u) if x["code"] not in have and x["freq"] >= 2][:5]
     u["items"] = found
     if forgot:
         u["pending"] = forgot; u["step"] = "forgot"; save_users()
@@ -327,7 +354,7 @@ def handle(msg):
     if reply in ("r5", "r15", "rall"): pr["maxMin"] = {"r5": 6, "r15": 16, "rall": 999}[reply]; return ask(to, "split", u)
     if reply in ("s0", "s30", "sno"): pr["splitMin"] = {"s0": 0, "s30": 30, "sno": -1}[reply]; return ask(to, "basket", u)
     if reply == "mine":
-        L = learned(u); u["items"] = [{"src": x["name"], "name": x["name"], "qty": x["qty"]} for x in L]
+        L = learned(u); u["items"] = [{k: x[k] for k in ("src", "code", "name", "qty")} for x in L]
         send_text(to, "*הסל הקבוע שלך:*\n" + "\n".join(f"• {x['name']}" + (f" ×{x['qty']:g}" if x["qty"] != 1 else "") for x in L[:15]))
         return finish(to, u)
     if reply == "cam":
@@ -338,10 +365,10 @@ def handle(msg):
         u["step"] = "hh"; save_users(); return send_buttons(to, "*לכמה אנשים?*", [("hh12", "1–2"), ("hh34", "3–4"), ("hh5", "5+")])
     if reply in HH:
         f = HH[reply]
-        u["items"] = [{"src": n, "name": n, "qty": max(.5, round(q * f * 2) / 2) if BY[n][2] else max(1, round(q * f))} for n, q in WEEKLY if n in BY]
+        u["items"] = weekly_items(f)
         send_text(to, f"הכנתי סל שבועי רגיל: {len(u['items'])} מוצרים (חלב, לחם, גבינות, ירקות, פירות ועוד)."); return finish(to, u)
     if reply in ("addf", "noadd") and u["step"] == "forgot":
-        if reply == "addf": u["items"] += [{"src": x["name"], "name": x["name"], "qty": x["qty"]} for x in u.pop("pending", [])]
+        if reply == "addf": u["items"] += [{k: x.get(k, "") for k in ("src", "code", "name", "qty")} for x in u.pop("pending", [])]
         return finish(to, u)
 
     if t == "image":
@@ -399,7 +426,9 @@ class H(BaseHTTPRequestHandler):
             body = PRIVACY.encode(); self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8"); self.end_headers(); self.wfile.write(body); return
         else:
-            body = "קונה אישי פועל ✅".encode(); self.send_response(200)
+            d = kdata.D
+            info = f"\nנתונים: {len(d.stores)} סניפים, {len(d.items)} מוצרים, עודכן {d.built or d.version} ({d.source})" if d else ""
+            body = ("קונה אישי פועל ✅" + info).encode(); self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8"); self.end_headers(); self.wfile.write(body)
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0)); raw = self.rfile.read(n)
@@ -436,6 +465,7 @@ def safe_handle(m):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
+    kdata.load(force_download=os.environ.get("DATA_URL", "x") != ""); kdata.start_refresher()
     print("קונה אישי מאזין בפורט", port)
     if TG_TOKEN and PUBLIC_URL:
         try:
