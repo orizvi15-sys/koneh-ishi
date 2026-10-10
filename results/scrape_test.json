@@ -1,0 +1,356 @@
+[
+ {
+  "chain": "SHUFERSAL",
+  "he": "שופרסל",
+  "stores_sec": 5,
+  "stores": 417,
+  "price_sec": 5,
+  "price_file": "PriceFull7290027600007-002-049-20261010-030215.xml",
+  "price_time": "",
+  "items": 6276,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "RAMI_LEVY",
+  "he": "רמי לוי",
+  "stores_sec": 7,
+  "stores": 0,
+  "price_sec": 8,
+  "price_file": "PriceFull7290058140886-001-001-20261010-001003.xml",
+  "price_time": "",
+  "items": 12968,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "YOHANANOF",
+  "he": "יוחננוף",
+  "stores_sec": 6,
+  "stores": 0,
+  "price_sec": 7,
+  "price_file": "PriceFull7290803800003-000-001-20261010-004033.xml",
+  "price_time": "",
+  "items": 10790,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "OSHER_AD",
+  "he": "אושר עד",
+  "stores_sec": 6,
+  "stores": 0,
+  "price_sec": 7,
+  "price_file": "PriceFull7290103152017-001-001-20261010-080013.xml",
+  "price_time": "",
+  "items": 6628,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "VICTORY_NEW_SOURCE",
+  "he": "ויקטורי",
+  "stores_sec": 61,
+  "price_sec": 61,
+  "ok_stores": false,
+  "ok_prices": false,
+  "error": [
+   "no files found"
+  ]
+ },
+ {
+  "chain": "TIV_TAAM",
+  "he": "טיב טעם",
+  "stores_sec": 6,
+  "stores": 0,
+  "price_sec": 9,
+  "price_file": "PriceFull7290873255550-000-002-20261010-004004.xml",
+  "price_time": "",
+  "items": 21623,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "YAYNO_BITAN_AND_CARREFOUR",
+  "he": "קרפור/יינות ביתן",
+  "stores_sec": 5,
+  "stores": 0,
+  "price_sec": 3,
+  "price_file": "PriceFull7290055700007-001-002-20261010-051005.xml",
+  "price_time": "",
+  "items": 6072,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "HAZI_HINAM",
+  "he": "חצי חינם",
+  "stores_sec": 15,
+  "price_sec": 15,
+  "ok_stores": false,
+  "ok_prices": false,
+  "error": [
+   "no files found"
+  ]
+ },
+ {
+  "chain": "MAHSANI_ASHUK_NEW_SOURCE",
+  "he": "מחסני השוק",
+  "stores_sec": 0,
+  "price_sec": 0,
+  "ok_stores": false,
+  "ok_prices": false,
+  "error": [
+   "ValueError: class_names MAHSANI_ASHUK_NEW_SOURCE not found"
+  ]
+ },
+ {
+  "chain": "KESHET",
+  "he": "קשת טעמים",
+  "stores_sec": 6,
+  "stores": 0,
+  "price_sec": 6,
+  "price_file": "PriceFull7290055700007-0820-202403281445.xml",
+  "price_time": "202403281445",
+  "items": 2365,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "SUPER_PHARM",
+  "he": "סופר-פארם",
+  "stores_sec": 16,
+  "price_sec": 16,
+  "ok_stores": false,
+  "ok_prices": false,
+  "error": [
+   "no files found"
+  ]
+ },
+ {
+  "chain": "GOOD_PHARM",
+  "he": "גוד פארם",
+  "stores_sec": 4,
+  "stores": 82,
+  "price_sec": 5,
+  "price_file": "PriceFull7290058197699-000-970-20261010-043206.xml",
+  "price_time": "",
+  "items": 3376,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "BAREKET",
+  "he": "ברקת",
+  "stores_sec": 4,
+  "stores": 15,
+  "price_sec": 4,
+  "price_file": "PriceFull7290875100001-002-068-20261010-043804.xml",
+  "price_time": "",
+  "items": 2912,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "CITY_MARKET_KIRYATGAT",
+  "he": "סיטי מרקט ק\"ג",
+  "stores_sec": 6,
+  "stores": 28,
+  "price_sec": 5,
+  "price_file": "PriceFull7290058288090-000-079-20261010-033207.xml",
+  "price_time": "",
+  "items": 4331,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "CITY_MARKET_SHOPS",
+  "he": "סיטי מרקט",
+  "stores_sec": 6,
+  "stores": 1,
+  "price_sec": 7,
+  "price_file": "PriceFull7290000000003-024-202610101817.xml",
+  "price_time": "202610101817",
+  "items": 35452,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "DOR_ALON",
+  "he": "דור אלון",
+  "stores_sec": 6,
+  "stores": 0,
+  "price_sec": 7,
+  "price_file": "PriceFull7290492000005-001-401-20261010-000515.xml",
+  "price_time": "",
+  "items": 5065,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "HET_COHEN_NEW_SOURCE",
+  "he": "ח. כהן",
+  "stores_sec": 31,
+  "price_sec": 31,
+  "ok_stores": false,
+  "ok_prices": false,
+  "error": [
+   "no files found"
+  ]
+ },
+ {
+  "chain": "KING_STORE",
+  "he": "קינג סטור",
+  "stores_sec": 4,
+  "stores": 48,
+  "price_sec": 5,
+  "price_file": "PriceFull7290058108879-000-340-20261010-043511.xml",
+  "price_time": "",
+  "items": 2392,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "NETIV_HASED",
+  "he": "נתיב החסד",
+  "stores_sec": 15,
+  "price_sec": 15,
+  "ok_stores": false,
+  "ok_prices": false,
+  "error": [
+   "no files found"
+  ]
+ },
+ {
+  "chain": "POLIZER",
+  "he": "פוליצר",
+  "stores_sec": 5,
+  "stores": 0,
+  "price_sec": 8,
+  "price_file": "PriceFull7291059100008-001-001-20261010-001014.xml",
+  "price_time": "",
+  "items": 10708,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "SALACH_DABACH",
+  "he": "סאלח דבאח",
+  "stores_sec": 6,
+  "stores": 0,
+  "price_sec": 9,
+  "price_file": "PriceFull7290526500006-001-004-20261010-002000.xml",
+  "price_time": "",
+  "items": 12532,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "SHEFA_BARCART_ASHEM",
+  "he": "שפע ברכת השם",
+  "stores_sec": 4,
+  "stores": 22,
+  "price_sec": 5,
+  "price_file": "PriceFull7290058134977-000-042-20261010-053646.xml",
+  "price_time": "",
+  "items": 3921,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "SHUK_AHIR",
+  "he": "שוק העיר",
+  "stores_sec": 3,
+  "stores": 26,
+  "price_sec": 4,
+  "price_file": "PriceFull7290058148776-000-319-20261010-053257.xml",
+  "price_time": "",
+  "items": 1964,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "STOP_MARKET",
+  "he": "סטופ מרקט",
+  "stores_sec": 5,
+  "stores": 0,
+  "price_sec": 8,
+  "price_file": "PriceFull7290639000004-001-001-20261010-010015.xml",
+  "price_time": "",
+  "items": 13663,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "SUPER_YUDA",
+  "he": "סופר יודה",
+  "stores_sec": 6,
+  "stores": 0,
+  "price_sec": 7,
+  "price_file": "PriceFull7290058177776-001-201-20261010-010019.xml",
+  "price_time": "",
+  "items": 5685,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "SUPER_SAPIR",
+  "he": "סופר ספיר",
+  "stores_sec": 3,
+  "stores": 73,
+  "price_sec": 5,
+  "price_file": "PriceFull7290058156016-019-502-20261010-040710.xml",
+  "price_time": "",
+  "items": 1112,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "FRESH_MARKET_AND_SUPER_DOSH",
+  "he": "פרש מרקט",
+  "stores_sec": 5,
+  "stores": 0,
+  "price_sec": 7,
+  "price_file": "PriceFull7290876100000-001-001-20261010-001015.xml",
+  "price_time": "",
+  "items": 10037,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "YELLOW",
+  "he": "יילו",
+  "stores_sec": 6,
+  "stores": 0,
+  "price_sec": 6,
+  "price_file": "PriceFull7290644700005-001-100-20261010-001003.xml",
+  "price_time": "",
+  "items": 514,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "ZOL_VEBEGADOL",
+  "he": "זול ובגדול",
+  "stores_sec": 3,
+  "stores": 35,
+  "price_sec": 5,
+  "price_file": "PriceFull7290058173198-000-089-20261010-053415.xml",
+  "price_time": "",
+  "items": 4258,
+  "ok_stores": true,
+  "ok_prices": true
+ },
+ {
+  "chain": "WOLT",
+  "he": "וולט מרקט",
+  "stores_sec": 1,
+  "stores": 34,
+  "price_sec": 1,
+  "price_file": "PriceFull7290058249350-000-043-20261006-000011.xml",
+  "price_time": "",
+  "items": 5986,
+  "ok_stores": true,
+  "ok_prices": true
+ }
+]
