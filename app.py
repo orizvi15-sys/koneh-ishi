@@ -11,7 +11,9 @@ Python 3 בלבד, בלי ספריות חיצוניות.
   CLAUDE_MODEL       – (לא חובה) ברירת מחדל claude-sonnet-5-5
   PORT               – Render קובע אותו לבד
 """
-import json, math, os, re, threading, time, base64, urllib.request, urllib.error
+import json, math, os, re, sys, threading, time, base64, urllib.request, urllib.error
+try: sys.stdout.reconfigure(line_buffering=True); sys.stderr.reconfigure(line_buffering=True)
+except Exception: pass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -300,7 +302,11 @@ def handle(msg):
     if t == "interactive":
         it = msg["interactive"]; reply = (it.get("button_reply") or it.get("list_reply") or {}).get("id")
     text = msg.get("text", {}).get("body", "").strip() if t == "text" else ""
+    print("handle", t, "step", u["step"])
 
+    if text == "מחק אותי":
+        USERS.pop(to, None); save_users()
+        return send_text(to, "מחקתי את כל המידע שלך 🗑️ כדי להתחיל מחדש כתבו שלום.")
     if text in ("הגדרות", "התחל", "מחדש", "/start") or u["step"] == "new":
         if u["step"] == "new" and pr.get("home"):
             u["step"] = "keep"; save_users()
@@ -375,12 +381,23 @@ def tg_to_msg(up):
     return {**base, "type": "unknown"}
 
 # ---------- שרת ----------
+PRIVACY = """<!doctype html><html dir="rtl" lang="he"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>קונה אישי – מדיניות פרטיות</title><body style="font-family:sans-serif;max-width:640px;margin:2em auto;padding:0 16px;line-height:1.6">
+<h1>קונה אישי – מדיניות פרטיות</h1>
+<p>קונה אישי הוא בוט שמשווה מחירי סופרמרקטים. כדי לעשות זאת הוא שומר: מספר הטלפון/מזהה הצ'אט, המיקום ששלחת, ההעדפות שבחרת ורשימות הקניות שלך – רק לצורך מתן ההמלצה ולמידת הרגלי הקנייה שלך.</p>
+<p>תמונות קבלות נשלחות לעיבוד אוטומטי (Anthropic Claude API) לצורך זיהוי המוצרים בלבד, ואינן נשמרות.</p>
+<p>המידע לא נמכר ולא מועבר לצד שלישי לשום מטרה אחרת. למחיקת כל המידע שלך: כתבו "מחק אותי" לבוט או פנו אלינו בבוט.</p>
+</body></html>"""
 SEEN = set()
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
         q = parse_qs(urlparse(self.path).query)
-        if urlparse(self.path).path == "/webhook" and q.get("hub.mode") == ["subscribe"] and q.get("hub.verify_token") == [VERIFY]:
-            body = q["hub.challenge"][0].encode(); self.send_response(200)
+        p = urlparse(self.path).path
+        if p == "/webhook" and q.get("hub.mode") == ["subscribe"] and q.get("hub.verify_token") == [VERIFY]:
+            print("WA webhook verified"); body = q["hub.challenge"][0].encode(); self.send_response(200)
+        elif p == "/privacy":
+            body = PRIVACY.encode(); self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8"); self.end_headers(); self.wfile.write(body); return
         else:
             body = "קונה אישי פועל ✅".encode(); self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8"); self.end_headers(); self.wfile.write(body)
@@ -399,6 +416,9 @@ class H(BaseHTTPRequestHandler):
             data = json.loads(raw)
             for e in data.get("entry", []):
                 for c in e.get("changes", []):
+                    v = c.get("value", {})
+                    print("WA in:", c.get("field"), "msgs:", len(v.get("messages", [])),
+                          "statuses:", [(s.get("status"), s.get("errors")) for s in v.get("statuses", [])])
                     for m in c.get("value", {}).get("messages", []):
                         if m.get("id") in SEEN: continue
                         SEEN.add(m.get("id"))
