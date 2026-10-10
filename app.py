@@ -41,18 +41,74 @@ WEEKLY = [["חלב 3% בקרטון 2 ליטר", 2], ["גבינת קוטג 5% 250
 HH = {"hh12": 1, "hh34": 1.6, "hh5": 2.2}
 
 # ---------- משתמשים (קובץ JSON פשוט) ----------
+# הזיכרון נשמר ב-repo פרטי ב-GitHub (USERS_REPO + USERS_TOKEN), כדי שלא יימחק בכל עדכון של השרת.
+# בלי המשתנים האלה – נשמר רק בקובץ מקומי (נמחק בעדכון).
 USERS_PATH = os.path.join(HERE, "data", "users.json")
+USERS_REPO = os.environ.get("USERS_REPO", "").strip().strip("/")
+USERS_TOKEN = os.environ.get("USERS_TOKEN", "").strip()
 _lock = threading.Lock()
-try:
-    USERS = json.load(open(USERS_PATH, encoding="utf-8"))
-except Exception:
-    USERS = {}
+_remote = {"sha": None, "ok": False}
+_dirty = threading.Event()
+
+def gh_users(method, body=None):
+    req = urllib.request.Request(os.environ.get("GITHUB_API", "https://api.github.com") + f"/repos/{USERS_REPO}/contents/users.json", method=method,
+                                 data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Authorization": f"Bearer {USERS_TOKEN}", "Accept": "application/vnd.github+json",
+                                          "User-Agent": "koneh-ishi-bot", "Content-Type": "application/json"})
+    return json.load(urllib.request.urlopen(req, timeout=30))
+
+def load_users():
+    if USERS_REPO and USERS_TOKEN:
+        for attempt in range(3):
+            try:
+                r = gh_users("GET"); _remote.update(sha=r["sha"], ok=True)
+                data = json.loads(base64.b64decode(r["content"]).decode("utf-8") or "{}")
+                print(f"זיכרון משתמשים נטען מ-GitHub: {len(data)} משתמשים", flush=True); return data
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    _remote.update(ok=True); print("אין עדיין users.json ב-repo – מתחילים ריק", flush=True); return {}
+                print("טעינת זיכרון נכשלה:", e.code, e.read()[:200], flush=True)
+                if e.code in (401, 403): break
+            except Exception as e:
+                print("טעינת זיכרון נכשלה:", e, flush=True)
+            time.sleep(3)
+        print("⚠️ אין גישה לזיכרון ב-GitHub – לא אכתוב לשם כדי לא למחוק מידע", flush=True)
+    else:
+        print("⚠️ USERS_REPO/USERS_TOKEN לא מוגדרים – הזיכרון יימחק בכל עדכון של השרת", flush=True)
+    try: return json.load(open(USERS_PATH, encoding="utf-8"))
+    except Exception: return {}
+
+def push_users():
+    if not _remote["ok"]: return
+    with _lock: content = json.dumps(USERS, ensure_ascii=False, separators=(",", ":"))
+    body = {"message": "update users", "content": base64.b64encode(content.encode()).decode()}
+    for attempt in range(3):
+        if _remote["sha"]: body["sha"] = _remote["sha"]
+        try:
+            _remote["sha"] = gh_users("PUT", body)["content"]["sha"]; return
+        except urllib.error.HTTPError as e:
+            if e.code in (409, 422):  # sha לא עדכני – מביאים את האחרון ומנסים שוב
+                try: _remote["sha"] = gh_users("GET")["sha"]
+                except Exception: pass
+            else:
+                print("שמירת זיכרון נכשלה:", e.code, e.read()[:200], flush=True); time.sleep(5)
+        except Exception as e:
+            print("שמירת זיכרון נכשלה:", e, flush=True); time.sleep(5)
+    _dirty.set()
+
+def _users_writer():
+    while True:
+        _dirty.wait(); time.sleep(10); _dirty.clear(); push_users()
+
+USERS = load_users()
+threading.Thread(target=_users_writer, daemon=True).start()
 
 def save_users():
     with _lock:
         tmp = USERS_PATH + ".tmp"
         json.dump(USERS, open(tmp, "w", encoding="utf-8"), ensure_ascii=False)
         os.replace(tmp, USERS_PATH)
+    _dirty.set()
 
 def user(wa_id):
     return USERS.setdefault(wa_id, {"step": "new", "prefs": {}, "hist": []})
@@ -466,6 +522,11 @@ def safe_handle(m):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     kdata.load(force_download=os.environ.get("DATA_URL", "x") != ""); kdata.start_refresher()
+    import signal
+    def _bye(*_):  # Render שולח SIGTERM לפני עדכון – שומרים את הזיכרון לפני שיוצאים
+        if _dirty.is_set(): push_users()
+        os._exit(0)
+    signal.signal(signal.SIGTERM, _bye)
     print("קונה אישי מאזין בפורט", port)
     if TG_TOKEN and PUBLIC_URL:
         try:
