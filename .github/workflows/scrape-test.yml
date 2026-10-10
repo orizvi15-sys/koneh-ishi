@@ -1,0 +1,29 @@
+name: scrape-test
+on:
+  workflow_dispatch:
+  push:
+    paths: [".github/workflows/scrape-test.yml", "tools/scrape_test.py"]
+permissions:
+  contents: write
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Install scraper
+        run: |
+          pip install -U "git+https://github.com/OpenIsraeliSupermarkets/israeli-supermarket-scarpers.git"
+          python -m playwright install --with-deps chromium || true
+      - name: Run test
+        run: python tools/scrape_test.py
+      - name: Save results
+        if: always()
+        run: |
+          [ -f results/scrape_test.md ] && cat results/scrape_test.md >> "$GITHUB_STEP_SUMMARY" || true
+          git config user.name "koneh-ishi-bot"; git config user.email "bot@users.noreply.github.com"
+          git add results || true
+          git commit -m "Scrape test results" || exit 0
+          git pull --rebase -q && git push
