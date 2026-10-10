@@ -496,12 +496,9 @@ def _reminder_loop():
 
 CLUBS = ["שופרסל", "רמי לוי", "יוחננוף", "אושר עד", "ויקטורי", "טיב טעם"]
 def ask_clubs(to, u, first=False):
-    have = u["prefs"].get("clubs", [])
-    btns = [(f"club:{c}", ("✅ " if c in have else "") + c) for c in CLUBS] + [("club:done" if have else "club:none", "סיימתי" if have else "אף אחד")]
     u["step"] = "clubs"; save_users()
-    head = ("שאלה אחרונה ונעלם 🙂 *באיזה מועדוני לקוחות אתה חבר?*\nאפשר לבחור כמה, ובסוף ללחוץ סיימתי." if first
-            else "עוד מועדון? כשמסיימים לוחצים *סיימתי*.")
-    return send_buttons(to, head, btns)
+    return send_buttons(to, "שאלה קטנה אחרונה 🙂 *באיזה מועדון לקוחות אתה חבר?*",
+                        [(f"club:{c}", c) for c in CLUBS] + [("club:none", "אף אחד")])
 
 def got_items(to, u, items):
     found, missed = match_items(items)
@@ -560,13 +557,9 @@ def handle(msg):
     if reply in ("s0", "s30", "sno"): pr["splitMin"] = {"s0": SPLIT_MIN, "s30": SPLIT_MIN, "sno": -1}[reply]; return ask(to, "basket", u)
     if reply and reply.startswith("club:"):
         c = reply[5:]
-        if c == "done" or c == "none":
-            if c == "none": pr["clubs"] = []
-            u["step"] = "done"; save_users()
-            return send_text(to, "תודה! רשמתי 👍" + (f" (מועדונים: {', '.join(pr['clubs'])})" if pr.get("clubs") else ""))
-        pr.setdefault("clubs", [])
-        if c not in pr["clubs"]: pr["clubs"].append(c)
-        save_users(); return ask_clubs(to, u)
+        pr["clubs"] = [] if c == "none" else [c]
+        u["step"] = "done"; save_users()
+        return send_text(to, "תודה, רשמתי 👍")
     if reply in ("kreg", "kmeh"):
         pr["kosher"] = reply[1:]; save_users(); return send_text(to, "רשמתי 👍")
     if reply in ("det", "oth", "spl"):
