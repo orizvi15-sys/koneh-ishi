@@ -56,6 +56,26 @@ def nominatim(q):
     return None
 
 
+def nominatim_struct(street, city):
+    """חיפוש מובנה (רחוב + עיר) – מצליח לעתים קרובות כשחיפוש חופשי נכשל"""
+    q = {"street": street, "city": city, "country": "ישראל", "format": "json", "limit": 1}
+    url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode(q)
+    try:
+        r = json.load(urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=30))
+        if r:
+            lat, lng = float(r[0]["lat"]), float(r[0]["lon"])
+            if 29.3 < lat < 33.5 and 34.2 < lng < 35.95: return [lat, lng]
+    except Exception as ex:
+        print("geocode error", street, city, ex); time.sleep(5)
+    return None
+
+
+def clean_addr(a):
+    a = re.sub(r"\b(רח'?|רחוב|שד'?|שדרות|שד\.)\s+", "", a or "")
+    a = re.sub(r"\s*(,|-)?\s*(מרכז מסחרי|קניון|מתחם|א\.?ת\.?|אזור התעשייה|אזור תעשייה|פינת).*$", "", a)
+    return re.sub(r"\s+", " ", a).strip(" ,")
+
+
 def clean_name(n):
     return re.sub(r"\s+", " ", re.sub(r"^[\s*.\-]+|[\s*.\-]+$", "", n or "")).strip()
 
@@ -107,10 +127,20 @@ def main():
         s["city"] = c
         if k in OVERRIDES: s["p"] = OVERRIDES[k]; s["prec"] = "manual"; continue
         ck = f"{s['chain']}|{s['name']}|{s['addr']}|{c}"
-        if ck in geo and geo[ck]: s["p"], s["prec"] = geo[ck]; continue
+        if ck in geo and geo[ck]:
+            p, prec = geo[ck]
+            v2 = geo.setdefault("_v2", {})
+            if prec in ("city", "name") and ck not in v2 and s["addr"] and c and q_left > 0:
+                v2[ck] = 1; q_left -= 1
+                w = 1.1 - (time.time() - t_last)
+                if w > 0: time.sleep(w)
+                t_last = time.time()
+                p2 = nominatim_struct(clean_addr(s["addr"]), c)
+                if p2: p, prec = p2, "address"; geo[ck] = [p, prec]
+            s["p"], s["prec"] = p, prec; continue
         if ck in geo and geo[ck] is None and q_left < 500: continue
         p = prec = None
-        addr = re.sub(r"\b(רח'?|רחוב|שד'?|שדרות)\s+", "", s["addr"])
+        addr = clean_addr(s["addr"])
         if addr and c: p = geocode(f"{addr}, {c}"); prec = "address"
         if not p and addr and not c: p = geocode(f"{addr}"); prec = "address"
         if not p and s["name"] and c: p = geocode(f"{s['chain']} {s['name']}, {c}"); prec = "name"
