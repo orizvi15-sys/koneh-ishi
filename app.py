@@ -1,11 +1,12 @@
 """
-קונה אישי – בוט ווטסאפ להשוואת מחירי סופרמרקטים.
+קונה אישי – בוט ווטסאפ/טלגרם להשוואת מחירי סופרמרקטים.
 Python 3 בלבד, בלי ספריות חיצוניות.
 
 משתני סביבה:
   WHATSAPP_TOKEN     – ה-access token מ-Meta
   PHONE_NUMBER_ID    – ה-Phone number ID מ-Meta
   VERIFY_TOKEN       – מילה סודית שתבחר, ותזין גם ב-Meta בהגדרת ה-Webhook
+  TELEGRAM_TOKEN     – ה-token מ-@BotFather (לבוט בטלגרם)
   ANTHROPIC_API_KEY  – (לא חובה) לקריאת קבלות ולהתאמת מוצרים חכמה
   CLAUDE_MODEL       – (לא חובה) ברירת מחדל claude-sonnet-5-5
   PORT               – Render קובע אותו לבד
@@ -21,6 +22,9 @@ VERIFY = os.environ.get("VERIFY_TOKEN", "koneh-ishi")
 CLAUDE_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
 GRAPH = "https://graph.facebook.com/v21.0"
+TG_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
+TG = f"https://api.telegram.org/bot{TG_TOKEN}"
+PUBLIC_URL = os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL", "")
 DRY_RUN = os.environ.get("DRY_RUN") == "1"  # לבדיקות: מדפיס במקום לשלוח
 
 # ---------- נתונים ----------
@@ -52,6 +56,23 @@ def save_users():
 def user(wa_id):
     return USERS.setdefault(wa_id, {"step": "new", "prefs": {}, "hist": []})
 
+# ---------- טלגרם ----------
+def tg_call(method, payload):
+    if DRY_RUN:
+        print("TG", method, json.dumps(payload, ensure_ascii=False)[:600]); return {}
+    req = urllib.request.Request(f"{TG}/{method}", data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
+    try:
+        return json.load(urllib.request.urlopen(req, timeout=20))
+    except urllib.error.HTTPError as e:
+        print("Telegram error", e.code, e.read()[:500]); return {}
+
+def tg_html(text):  # *bold* / _italic_ בסגנון ווטסאפ → HTML של טלגרם
+    s = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    s = re.sub(r"\*([^*\n]+)\*", r"<b>\1</b>", s)
+    return re.sub(r"(?<![\w])_([^_\n]+)_(?![\w])", r"<i>\1</i>", s)
+
+def is_tg(to): return str(to).startswith("tg:")
+
 # ---------- שליחת הודעות ----------
 def graph_post(path, payload):
     if DRY_RUN:
@@ -64,20 +85,32 @@ def graph_post(path, payload):
         print("Graph error", e.code, e.read()[:500]); return {}
 
 def send_text(to, text):
+    if is_tg(to):
+        return tg_call("sendMessage", {"chat_id": to[3:], "text": tg_html(text[:4000]), "parse_mode": "HTML", "disable_web_page_preview": True})
     graph_post(f"{PHONE_ID}/messages", {"messaging_product": "whatsapp", "to": to, "type": "text",
                                          "text": {"body": text[:4000], "preview_url": True}})
 
 def send_buttons(to, text, buttons):  # buttons: [(id, title<=20)] up to 3
+    if is_tg(to):
+        return tg_call("sendMessage", {"chat_id": to[3:], "text": tg_html(text), "parse_mode": "HTML",
+                        "reply_markup": {"inline_keyboard": [[{"text": tt, "callback_data": i}] for i, tt in buttons]}})
     graph_post(f"{PHONE_ID}/messages", {"messaging_product": "whatsapp", "to": to, "type": "interactive",
         "interactive": {"type": "button", "body": {"text": text[:1024]},
                         "action": {"buttons": [{"type": "reply", "reply": {"id": i, "title": t[:20]}} for i, t in buttons]}}})
 
 def send_location_request(to, text):
+    if is_tg(to):
+        return tg_call("sendMessage", {"chat_id": to[3:], "text": tg_html(text), "parse_mode": "HTML",
+                        "reply_markup": {"keyboard": [[{"text": "📍 שליחת המיקום שלי", "request_location": True}]],
+                                         "resize_keyboard": True, "one_time_keyboard": True}})
     graph_post(f"{PHONE_ID}/messages", {"messaging_product": "whatsapp", "to": to, "type": "interactive",
         "interactive": {"type": "location_request_message", "body": {"text": text},
                         "action": {"name": "send_location"}}})
 
 def download_media(media_id):
+    if media_id.startswith("tg:"):
+        fp = tg_call("getFile", {"file_id": media_id[3:]})["result"]["file_path"]
+        return urllib.request.urlopen(f"https://api.telegram.org/file/bot{TG_TOKEN}/{fp}", timeout=30).read(), "image/jpeg"
     meta = json.load(urllib.request.urlopen(urllib.request.Request(f"{GRAPH}/{media_id}",
                      headers={"Authorization": f"Bearer {TOKEN}"}), timeout=20))
     data = urllib.request.urlopen(urllib.request.Request(meta["url"], headers={"Authorization": f"Bearer {TOKEN}"}), timeout=30).read()
@@ -186,8 +219,9 @@ def compute(u):
     pool = [r for r in rows if r["min"] <= pr["maxMin"]] or [nearest]
     ranked = sorted(pool, key=lambda r: r["tot"]); best = ranked[0]
     # לא שולחים רחוק בשביל חיסכון זניח: אם סניף קרוב יותר כמעט באותו מחיר – ממליצים עליו
-    close = [r for r in ranked if r["tot"] - best["tot"] < max(5, 0.03 * best["sum"])]
-    best = min(close, key=lambda r: r["d"]); ranked.remove(best); ranked.insert(0, best)
+    close = [r for r in ranked if r["tot"] - best["tot"] < max(5, 0.03 * best["sum"]) and r["min"] <= best["min"] - 3]
+    if close:
+        best = min(close, key=lambda r: r["d"]); ranked.remove(best); ranked.insert(0, best)
     split = None
     if pr["splitMin"] >= 0:
         for a in range(len(pool)):
@@ -265,7 +299,7 @@ def handle(msg):
         it = msg["interactive"]; reply = (it.get("button_reply") or it.get("list_reply") or {}).get("id")
     text = msg.get("text", {}).get("body", "").strip() if t == "text" else ""
 
-    if text in ("הגדרות", "התחל", "מחדש") or u["step"] == "new":
+    if text in ("הגדרות", "התחל", "מחדש", "/start") or u["step"] == "new":
         if u["step"] == "new" and pr.get("home"):
             u["step"] = "keep"; save_users()
             return send_buttons(to, WELCOME + "\n\nיש לי את ההעדפות שלך מהפעם הקודמת.", [("keep", "להמשיך איתן"), ("reset", "להתחיל מחדש")])
@@ -320,6 +354,24 @@ def handle(msg):
         return got_items(to, u, parse_list(text))
     send_text(to, "לא הבנתי 🙂 אפשר לשלוח רשימה, קבלה, או לכתוב *הגדרות*.")
 
+
+def tg_to_msg(up):
+    """ממיר עדכון מטלגרם להודעה בפורמט של ווטסאפ, כדי שאותה לוגיקה תעבוד לשניהם"""
+    if "callback_query" in up:
+        cq = up["callback_query"]; tg_call("answerCallbackQuery", {"callback_query_id": cq["id"]})
+        return {"from": f"tg:{cq['message']['chat']['id']}", "id": "tgc" + cq["id"], "type": "interactive",
+                "interactive": {"button_reply": {"id": cq.get("data", "")}}}
+    m = up.get("message") or {}
+    if not m: return None
+    base = {"from": f"tg:{m['chat']['id']}", "id": f"tg{m['chat']['id']}_{m['message_id']}"}
+    if "location" in m:
+        return {**base, "type": "location", "location": {"latitude": m["location"]["latitude"], "longitude": m["location"]["longitude"]}}
+    if "photo" in m:
+        return {**base, "type": "image", "image": {"id": "tg:" + m["photo"][-1]["file_id"]}}
+    if "text" in m:
+        return {**base, "type": "text", "text": {"body": m["text"]}}
+    return {**base, "type": "unknown"}
+
 # ---------- שרת ----------
 SEEN = set()
 class H(BaseHTTPRequestHandler):
@@ -333,6 +385,14 @@ class H(BaseHTTPRequestHandler):
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0)); raw = self.rfile.read(n)
         self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
+        if urlparse(self.path).path == "/telegram":
+            try:
+                m = tg_to_msg(json.loads(raw))
+                if m and m["id"] not in SEEN:
+                    SEEN.add(m["id"]); threading.Thread(target=safe_handle, args=(m,), daemon=True).start()
+            except Exception as ex:
+                print("bad telegram payload", ex)
+            return
         try:
             data = json.loads(raw)
             for e in data.get("entry", []):
@@ -355,4 +415,6 @@ def safe_handle(m):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     print("קונה אישי מאזין בפורט", port)
+    if TG_TOKEN and PUBLIC_URL:
+        print("חיבור טלגרם:", tg_call("setWebhook", {"url": PUBLIC_URL.rstrip("/") + "/telegram", "drop_pending_updates": True}))
     ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()
