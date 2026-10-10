@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: koneh-ishi
+    runtime: python
+    plan: free
+    buildCommand: "echo ok"
+    startCommand: "python app.py"
+    envVars:
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: PHONE_NUMBER_ID
+        sync: false
+      - key: VERIFY_TOKEN
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
