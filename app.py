@@ -65,6 +65,8 @@ def tg_call(method, payload):
         return json.load(urllib.request.urlopen(req, timeout=20))
     except urllib.error.HTTPError as e:
         print("Telegram error", e.code, e.read()[:500]); return {}
+    except Exception as e:
+        print("Telegram error", e); return {}
 
 def tg_html(text):  # *bold* / _italic_ בסגנון ווטסאפ → HTML של טלגרם
     s = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -416,5 +418,10 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     print("קונה אישי מאזין בפורט", port)
     if TG_TOKEN and PUBLIC_URL:
-        print("חיבור טלגרם:", tg_call("setWebhook", {"url": PUBLIC_URL.rstrip("/") + "/telegram", "drop_pending_updates": True}))
+        try:
+            print("חיבור טלגרם:", tg_call("setWebhook", {"url": PUBLIC_URL.rstrip("/") + "/telegram", "drop_pending_updates": True}))
+        except Exception as ex:
+            print("חיבור טלגרם נכשל:", ex)
+    elif not TG_TOKEN:
+        print("אזהרה: TELEGRAM_TOKEN לא מוגדר")
     ThreadingHTTPServer(("0.0.0.0", port), H).serve_forever()
