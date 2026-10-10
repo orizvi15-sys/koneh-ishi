@@ -6,6 +6,8 @@ services:
     buildCommand: "echo ok"
     startCommand: "python app.py"
     envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
       - key: WHATSAPP_TOKEN
         sync: false
       - key: PHONE_NUMBER_ID

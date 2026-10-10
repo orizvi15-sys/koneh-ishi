@@ -7,7 +7,8 @@
 ## הפעלה ב-Render
 1. New → Web Service → בוחרים את המאגר הזה.
 2. Start command: `python app.py` (ייקבע אוטומטית מ-`render.yaml`).
-3. Environment:
+3. Environment (מספיק אחד מהשניים – טלגרם או ווטסאפ):
+   - `TELEGRAM_TOKEN` – ה-token מ-@BotFather. החיבור לטלגרם נעשה אוטומטית כשהשרת עולה.
    - `WHATSAPP_TOKEN` – ה-access token מ-Meta (WhatsApp → API Setup)
    - `PHONE_NUMBER_ID` – ה-Phone number ID מאותו מסך
    - `VERIFY_TOKEN` – מילה סודית שתבחר (למשל `koneh-ishi-2026`)
