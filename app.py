@@ -783,8 +783,9 @@ def watchdog():
     for k in [k for k, t in sent.items() if time.time() - t > 3 * 86400]: sent.pop(k)
     save_users()
 
-# ---------- בדיקה עצמית יומית: אותה רשימה פעמיים → אותה תוצאה, כמויות הגיוניות ----------
-SELFTEST_LIST = """חלב 3% – 4 קרטונים
+# ---------- בדיקה עצמית יומית: אותה רשימה פעמיים → אותה תוצאה, כמויות הגיוניות, בכמה ערים ----------
+# כל רשימה: (טקסט, {תחילת שם: כמות צפויה}) – מוצרים ארוזים = מספר חבילות, שקילים = ק"ג
+SELFTEST_LISTS = [("""חלב 3% – 4 קרטונים
 לחם אחיד פרוס – 2
 ביצים L – 12 יחידות
 קוטג' 5% – 3
@@ -801,41 +802,77 @@ SELFTEST_LIST = """חלב 3% – 4 קרטונים
 קוקה קולה 1.5 ליטר – 2 בקבוקים
 מים מינרליים – שישייה
 נייר טואלט – 32 גלילים
-סבון כלים – 1 בקבוק"""
-# כמה צריך לצאת לכל שורה (מוצרים ארוזים = מספר חבילות)
-SELFTEST_QTY = {"חלב": 4, "לחם": 2, "ביצים": 1, "קוטג": 3, "גבינה צהובה": 1, "פסטה": 3, "שמן": 1, "סוכר": 1,
-                "במבה": 2, "ביסלי": 2, "קוקה קולה": 2, "מים": 1, "נייר טואלט": 1, "סבון כלים": 1}
-SELFTEST_HOME = [31.4215, 34.5925]   # נתיבות
+סבון כלים – 1 בקבוק""",
+  {"חלב": 4, "לחם": 2, "ביצים": 1, "קוטג": 3, "גבינה צהובה": 1, "פסטה": 3, "שמן": 1, "סוכר": 1,
+   "במבה": 2, "ביסלי": 2, "קוקה קולה": 2, "מים": 1, "נייר טואלט": 1, "סבון כלים": 1}),
+ ("""חזה עוף – 2 קילו
+בשר טחון – חצי קילו
+פילה סלמון – 300 גרם
+גבינה בולגרית – 250 גרם
+שניצל תירס – 2 חבילות
+נקניקיות – 1 חבילה
+טונה בשמן – רביעייה
+חומוס – 2 קופסאות
+טחינה – 1
+קפה טורקי – 1
+תה – 1 קופסה (100 שקיות)
+קורנפלקס – 1
+שוקו – 6 יחידות
+יוגורט – 8 גביעים
+בננות – 1 ק"ג
+תפוחי אדמה – 3 ק"ג
+גזר – 1 ק"ג
+אבקת כביסה – 1
+מגבות נייר – 6 גלילים
+משחת שיניים – 2""",
+  {"חזה עוף": 2, "בשר טחון": 0.5, "סלמון": 0.3, "שניצל": 2, "נקניקיות": 1, "טונה": 1, "חומוס": 2,
+   "טחינה": 1, "קפה": 1, "תה": 1, "קורנפלקס": 1, "בננ": 1, "תפוח": 3, "גזר": 1, "אבקת כביסה": 1,
+   "מגבות נייר": 1, "משחת שיניים": 2})]
+SELFTEST_CITIES = {"נתיבות": [31.4215, 34.5925], "תל אביב": [32.0809, 34.7806], "ירושלים": [31.7857, 35.2007],
+                   "חיפה": [32.7940, 34.9896], "באר שבע": [31.2518, 34.7913], "פתח תקווה": [32.0871, 34.8875]}
+SELFTEST_BASIC = ("חלב", "לחם", "ביצים", "עגבני", "מלפפו", "בצל", "תפוח", "גזר", "סוכר", "אורז", "פסטה", "שמן", "קמח", "בננ")
 _selftest = {"day": ""}
 
 def selftest():
     """מחזיר (רשימת בעיות, שורת סיכום)"""
-    D = kdata.D; probs = []; runs = []
+    D = kdata.D; probs = []; lines = []
     if not D or not CLAUDE_KEY: return ["אין נתונים / אין מפתח Claude – לא בדקתי"], ""
-    for k in range(2):
-        its = extract_items(text=SELFTEST_LIST) or []
-        if not its: probs.append(f"ריצה {k + 1}: לא הצלחתי לקרוא את רשימת הבדיקה"); continue
-        for key, want in SELFTEST_QTY.items():
-            x = next((x for x in its if x["name"].replace("'", "").startswith(key.replace("'", ""))), None)
-            if x is None: probs.append(f"ריצה {k + 1}: לא זוהה \"{key}\"")
-            elif abs(x["qty"] - want) > 0.01: probs.append(f"ריצה {k + 1}: \"{x['name']}\" נקרא ×{x['qty']:g} במקום ×{want:g}")
-        found, missed = match_items(its)
-        fu = {"prefs": {"home": SELFTEST_HOME, "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "items": found, "hist": []}
-        r = compute(fu)
-        if not isinstance(r, dict): probs.append(f"ריצה {k + 1}: החישוב נכשל"); continue
-        tot = sum(v[0] for v in r["ip"].values())
-        for it in found:
-            c = r["ip"].get(it.get("code", ""), [0])[0]
-            if c > 150: probs.append(f"ריצה {k + 1}: שורה יקרה חשודה – {it['name']} ×{it['qty']:g} = ₪{c:.0f}")
-        runs.append((sorted((x["name"], x["qty"]) for x in its), r["store"], tot, len(found), len(missed)))
-    if len(runs) == 2:
-        (a, sa, ta, *_), (b, sb, tb, *_) = runs
-        if a != b: probs.append("אותה רשימה נקראה אחרת בשתי הריצות: " + ", ".join(f"{n} ×{q:g}" for n, q in sorted(set(a) ^ set(b)))[:400])
-        if abs(ta - tb) > 0.03 * max(ta, tb): probs.append(f"מחיר שונה בין הריצות: ₪{ta:.0f} מול ₪{tb:.0f}")
-    summ = (f"🧪 בדיקה עצמית: {runs[0][3]} מוצרים זוהו, הכי זול {runs[0][1]} ₪{runs[0][2]:.0f}"
-            + (f" / ₪{runs[1][2]:.0f}" if len(runs) > 1 else "")) if runs else ""
-    probs = list(dict.fromkeys(probs))
-    return probs, summ
+    norm = lambda t: t.replace("'", "").replace("׳", "")
+    for li, (text, want_q) in enumerate(SELFTEST_LISTS, 1):
+        runs = []
+        for k in (1, 2):
+            tag = f"רשימה {li}, ריצה {k}"
+            its = extract_items(text=text) or []
+            if not its: probs.append(f"{tag}: לא הצלחתי לקרוא את הרשימה"); continue
+            for key, want in want_q.items():
+                x = next((x for x in its if norm(x["name"]).startswith(norm(key))), None)
+                if x is None: probs.append(f"{tag}: לא זוהה \"{key}\"")
+                elif abs(x["qty"] - want) > 0.01: probs.append(f"{tag}: \"{x['name']}\" נקרא ×{x['qty']:g} במקום ×{want:g}")
+            found, missed = match_items(its)
+            if missed: probs.append(f"{tag}: לא נמצאו במאגר: {', '.join(missed[:6])}")
+            res = {}
+            for city, home in SELFTEST_CITIES.items():
+                fu = {"prefs": {"home": home, "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "items": found, "hist": []}
+                r = compute(fu)
+                if not isinstance(r, dict): probs.append(f"{tag}: החישוב נכשל ב{city}"); continue
+                res[city] = (r["store"], sum(v[0] for v in r["ip"].values()))
+                for it in found:                       # מוצר בסיסי שיוצא "חסר" בסופר המומלץ = כנראה התאמה לא נכונה
+                    v = r["ip"].get(it.get("code", ""))
+                    if v and v[1] and any(norm(it.get("src", "")).startswith(b) for b in SELFTEST_BASIC):
+                        probs.append(f"{tag}: \"{it.get('src')}\" יצא חסר ב{r['store']} ({city}) – הותאם ל\"{it['name']}\"")
+                for it in found:
+                    c = r["ip"].get(it.get("code", ""), [0])[0]
+                    if c > 150 and not re.match(r"^[PMEW]", it.get("code", "")):
+                        probs.append(f"{tag}: שורה יקרה חשודה ב{city} – {it['name']} ×{it['qty']:g} = ₪{c:.0f}")
+            runs.append((sorted((x["name"], x["qty"]) for x in its), res, len(found)))
+        if len(runs) == 2:
+            (a, ra, n), (b, rb, _) = runs
+            if a != b: probs.append(f"רשימה {li}: נקראה אחרת בשתי הריצות: " + ", ".join(f"{x} ×{q:g}" for x, q in sorted(set(a) ^ set(b)))[:400])
+            for city in ra:
+                if city in rb and abs(ra[city][1] - rb[city][1]) > 0.03 * max(ra[city][1], rb[city][1]):
+                    probs.append(f"רשימה {li}, {city}: מחיר שונה בין הריצות ₪{ra[city][1]:.0f} מול ₪{rb[city][1]:.0f}")
+            lines.append(f"רשימה {li} ({n} מוצרים): " + " · ".join(f"{c} ₪{v[1]:.0f}" for c, v in ra.items()))
+    return list(dict.fromkeys(probs)), ("🧪 " + "\n".join(lines)) if lines else ""
 
 def selftest_daily():
     il = time.gmtime(time.time() + 3 * 3600)
