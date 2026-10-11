@@ -11,6 +11,11 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 
 IL = timezone(timedelta(hours=3))
+try:
+    from zoneinfo import ZoneInfo
+    IL_TZ = ZoneInfo("Asia/Jerusalem")
+except Exception:
+    IL_TZ = IL
 CHAIN_HE = {
     "SHUFERSAL": "שופרסל", "RAMI_LEVY": "רמי לוי", "YOHANANOF": "יוחננוף", "OSHER_AD": "אושר עד",
     "VICTORY_NEW_SOURCE": "ויקטורי", "VICTORY": "ויקטורי", "TIV_TAAM": "טיב טעם", "YAYNO_BITAN_AND_CARREFOUR": "קרפור",
@@ -175,6 +180,7 @@ def apply_promos(root, items, now):
         if not s or not e: continue
         if e.hour == 0 and e.minute == 0: e = e.replace(hour=23, minute=59)
         if not (s <= now <= e): continue
+        end_min = int(e.replace(tzinfo=IL_TZ).timestamp() // 60)   # הבוט יבדוק בעצמו שהמבצע עדיין בתוקף
         if deep(pr, "additionaliscoupon") == "1": continue
         clubs = [x.text.strip() for x in pr.iter("clubid") if x.text and x.text.strip()]
         desc = re.sub(r'\s+', ' ', deep(pr, "promotiondescription"))
@@ -201,7 +207,7 @@ def apply_promos(root, items, now):
                 cands.append(dp)
             for u in cands:
                 if 0.3 * reg <= u < reg - 0.009:
-                    if u < it.get(key, reg): it[key] = round(u, 2); n += 1
+                    if u < it.get(key, reg): it[key] = round(u, 2); it[key + "_end"] = end_min; n += 1
                     break
     return n
 
@@ -239,23 +245,27 @@ def build_chain(files, chain, cities, now=None):
         except Exception as ex:
             print("promo parse error", f, ex)
 
-    names, prices, club = {}, {}, {}
+    names, prices, promo, club = {}, {}, {}, {}
     for key, items in per_store.items():
-        row, crow = {}, {}
+        row, prow, crow = {}, {}, {}
         for code, it in items.items():
             if is_barcode(code, it):
-                row[code] = it.get("best", it["price"])
-                if it.get("club") is not None and it["club"] < row[code] - 0.009: crow[code] = it["club"]
+                row[code] = it["price"]                                   # מחיר רגיל
+                if it.get("best") is not None: prow[code] = [it["best"], it["best_end"]]   # מבצע + תוקף
+                c = it.get("club")
+                if c is not None and c < it.get("best", it["price"]) - 0.009: crow[code] = [c, it["club_end"]]
                 if len(it["name"]) > len(names.get(code, "")): names[code] = it["name"]
-        for pc, pn, R in PRODUCE_RX:
-            c = [it.get("best", it["price"]) for it in items.values()
-                 if it["w"] and R.search(clean_produce(it["name"])) and not BAD.search(it["name"])]
-            if c: row[pc] = min(c)
-        for sc, sn, R in STAPLES:
-            c = [it.get("best", it["price"]) for it in items.values()
-                 if R.search(it["name"]) and not STAPLE_BAD.search(it["name"]) and 8 <= it["price"] <= 30]
-            if c: row[sc] = min(c)
+        groups = [(pc, [it for it in items.values() if it["w"] and R.search(clean_produce(it["name"])) and not BAD.search(it["name"])])
+                  for pc, pn, R in PRODUCE_RX]
+        groups += [(sc, [it for it in items.values() if R.search(it["name"]) and not STAPLE_BAD.search(it["name"]) and 8 <= it["price"] <= 30])
+                   for sc, sn, R in STAPLES]
+        for gc, its in groups:
+            if not its: continue
+            row[gc] = min(it["price"] for it in its)
+            pr_ = [(it["best"], it["best_end"]) for it in its if it.get("best") is not None and it["best"] < row[gc] - 0.009]
+            if pr_: prow[gc] = list(min(pr_))
         prices[key] = row
+        if prow: promo[key] = prow
         if crow: club[key] = crow
     for pc, pn, R in PRODUCE_RX: names[pc] = f'{pn} (לק"ג)'
     for sc, sn, R in STAPLES: names[sc] = sn
@@ -266,7 +276,7 @@ def build_chain(files, chain, cities, now=None):
         chain_he[key] = CHAIN_ID_HE.get(key.split("-")[0], CHAIN_HE.get(chain, chain))
     out = {"chain": chain, "fetched": datetime.now(IL).isoformat(timespec="minutes"),
            "stores": {k: dict(v, chain=chain_he[k], ts=latest.get(k, "")) for k, v in stores.items() if k in prices},
-           "names": names, "prices": prices, "club": club,
+           "fmt": 2, "names": names, "prices": prices, "promo": promo, "club": club,
            "stats": {"store_files": len(kinds["stores"]), "price_files": len(kinds["price"]), "promo_files": len(kinds["promo"]),
                      "stores_with_prices": len(prices), "promo_hits": promo_n, "stores_listed": len(stores), "stores_with_club": len(club)}}
     return out

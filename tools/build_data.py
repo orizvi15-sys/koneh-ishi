@@ -93,7 +93,7 @@ def main():
         if c2: cities = c2; json.dump(cities, open(a.cities, "w", encoding="utf-8"), ensure_ascii=False)
     geo = load_json(a.geocache, {})
 
-    stores, prices, namecnt, chains, clubp = {}, {}, defaultdict(Counter), {}, {}
+    stores, prices, namecnt, chains, clubp, promop = {}, {}, defaultdict(Counter), {}, {}, {}
     for f in sorted(glob.glob(os.path.join(a.indir, "chain-*.json.gz"))):
         d = json.load(gzip.open(f, "rt", encoding="utf-8"))
         chains[d["chain"]] = {"fetched": d.get("fetched"), "stores": len(d["prices"]), "stats": d.get("stats")}
@@ -106,8 +106,12 @@ def main():
             if len(ts) >= 8 and ts[:2] == "20" and ts[:8] < old: continue  # קובץ ישן מדי (הרשת לא מעדכנת)
             if k in prices and stores[k].get("ts", "") > ts: continue
             prices[k] = v; stores[k] = d["stores"][k]
-            if k in d.get("club", {}): clubp[k] = d["club"][k]
+            NEVER = 2 ** 31 - 1
+            ov = lambda m: {c: (tuple(v) if isinstance(v, list) else (v, NEVER)) for c, v in m.items()}
+            if k in d.get("club", {}): clubp[k] = ov(d["club"][k])
             else: clubp.pop(k, None)
+            if k in d.get("promo", {}): promop[k] = ov(d["promo"][k])
+            else: promop.pop(k, None)
     print("chains", len(chains), "stores with prices", len(prices))
 
     # ---- שמות ערים ומיקומים ----
@@ -182,17 +186,32 @@ def main():
             z = zlib.compress(raw, 9); blob_of[h] = len(blobs); blobs.append((len(body), len(z))); body += z
         return blob_of[h], (h, row)
 
-    n_club = 0
+    def pack_ov(omap):
+        """שכבת מבצעים: אינדקס, מחיר באגורות, ותוקף (דקות מאז 1970)"""
+        nonlocal body
+        row = sorted((idx[c], int(round(p * 100)), int(e)) for c, (p, e) in omap.items() if c in idx and 0 < p < 50000)
+        if not row: return None
+        d = array.array("H"); pr = array.array("I"); en = array.array("I"); last = 0
+        for i, p, e in row:
+            d.append(i - last); last = i; pr.append(p); en.append(min(e, 2 ** 32 - 1))
+        raw = struct.pack("<I", len(row)) + d.tobytes() + pr.tobytes() + en.tobytes()
+        h = hashlib.sha1(raw).hexdigest()
+        if h not in blob_of:
+            z = zlib.compress(raw, 9); blob_of[h] = len(blobs); blobs.append((len(body), len(z))); body += z
+        return blob_of[h]
+
+    n_club = n_promo = 0
     for k in sorted(located):
         b, hr = pack(prices[k])
         if b is None: continue
         h, row = hr; vec_store.setdefault(h, row); vec_count[h] += 1
-        cb = pack(clubp[k])[0] if k in clubp else None
-        if cb is not None: n_club += 1
+        cb = pack_ov(clubp[k]) if k in clubp else None
+        pb = pack_ov(promop[k]) if k in promop else None
+        n_club += cb is not None; n_promo += pb is not None
         s = located[k]
         store_rows.append([k, s["chain"], s["name"], s["addr"], s["city"], round(s["p"][0], 6), round(s["p"][1], 6),
-                           b, s.get("ts", ""), s.get("prec", ""), -1 if cb is None else cb])
-    print("stores with club prices:", n_club)
+                           b, s.get("ts", ""), s.get("prec", ""), -1 if cb is None else cb, -1 if pb is None else pb])
+    print("stores with promos:", n_promo, "with club prices:", n_club)
 
     # חציון ארצי לכל מוצר (לפי וקטורים ייחודיים)
     per_item = defaultdict(list)
@@ -206,7 +225,7 @@ def main():
         items.append([c, nm, avail[c], med])
 
     ver = datetime.now(IL).strftime("%Y%m%d%H%M")
-    header = {"v": ver, "built": datetime.now(IL).isoformat(timespec="minutes"), "items": items, "stores": store_rows,
+    header = {"fmt": 2, "v": ver, "built": datetime.now(IL).isoformat(timespec="minutes"), "items": items, "stores": store_rows,
               "blobs": blobs, "chains": chains}
     hz = zlib.compress(json.dumps(header, ensure_ascii=False, separators=(",", ":")).encode(), 9)
     with open(a.out, "wb") as f:

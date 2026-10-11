@@ -422,7 +422,7 @@ def compute(u):
             "split": split_txt}
 
 # ---------- שיחה ----------
-WELCOME = "*קונה אישי 🛒*\nהיי{name}! אני אעזור לך לחסוך בקניות בסופר.\n5 שאלות קצרות (כ-20 שניות) ומתחילים 👇"
+WELCOME = "*קונה אישי 🛒*\nהיי{name}! אני אעזור לך לחסוך בקניות בסופר.\n6 שאלות קצרות (כ-20 שניות) ומתחילים 👇"
 def welcome(u): return WELCOME.format(name=" " + u["name"] if u.get("name") else "")
 PROFILE_KEYS = ("home", "mode", "maxMin", "splitMin")
 GREET = re.compile(r"^\W*(הי+|שלום|אהלן|הלו|יו|מה קורה|מה נשמע|מה המצב|מה הולך|מה איתך|בוקר טוב|ערב טוב|צהריים טובים|hi+|hey|hello|start)\b[^,\n]*$", re.I)
@@ -440,6 +440,8 @@ def ask(to, step, u, intro=""):
     elif step == "brand":
         send_buttons(to, "*5️⃣ כשאתה כותב \"חלב\" – מה חשוב לך?*",
                      [("bmine", "המותג שאני רגיל אליו"), ("bcheap", "הכי זול מאותו סוג"), ("bdep", "תלוי במוצר")])
+    elif step == "kosher":
+        send_buttons(to, "*6️⃣ יש העדפת כשרות?*", [("kreg", "רגיל"), ("kmeh", "מהדרין בלבד")])
     elif step == "split":
         send_buttons(to, "*4️⃣ מוכן לקנות בשני סופרים אם חוסכים?*", [("s0", "כן"), ("s30", "רק אם מעל ₪30"), ("sno", "לא, סופר אחד")])
     elif step == "basket":
@@ -467,9 +469,7 @@ def finish(to, u, redo=False):
     pr = u["prefs"]; n = len(u["hist"])
     if n >= 1 and "clubs" not in pr:                       # אחרי הקנייה הראשונה
         pr["clubs"] = []; return ask_clubs(to, u, first=True)
-    if n >= 2 and "kosher" not in pr and is_tg(to):        # אחרי הקנייה השנייה
-        pr["kosher"] = "?"; save_users()
-        return send_buttons(to, "עוד שאלה קטנה 🙂 *יש העדפת כשרות?*", [("kreg", "רגיל"), ("kmeh", "מהדרין בלבד")])
+
 
 # ---------- תזכורת שבועית ----------
 # קבלה שנסרקה ביום ובשעה מסוימים => תזכורת שבוע אחרי, שעתיים לפני אותה שעה (לא בלילה).
@@ -583,7 +583,9 @@ def handle(msg):
     if reply in ("r5", "r15", "rall"): pr["maxMin"] = {"r5": 6, "r15": 16, "rall": 999}[reply]; return ask(to, "hh", u)
     if reply in HH and u["step"] == "hh": pr["hh"] = reply; return ask(to, "brand", u)
     if reply in ("bmine", "bcheap", "bdep"):
-        pr["brand"] = reply[1:]; pr.setdefault("splitMin", SPLIT_MIN); pr.pop("remind_off", None)
+        pr["brand"] = reply[1:]; return ask(to, "kosher", u)
+    if reply in ("kreg", "kmeh") and u["step"] == "kosher":
+        pr["kosher"] = reply[1:]; pr.setdefault("splitMin", SPLIT_MIN); pr.pop("remind_off", None)
         send_text(to, "מעולה, סיימנו 🎉\nלמטה יש לך כפתורים קבועים – קנייה חדשה, צילום קבלה והגדרות 👇", menu=True)
         return ask(to, "basket", u)
     if reply in ("s0", "s30", "sno"): pr["splitMin"] = {"s0": SPLIT_MIN, "s30": SPLIT_MIN, "sno": -1}[reply]; return ask(to, "basket", u)

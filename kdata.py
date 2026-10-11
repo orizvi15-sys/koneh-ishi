@@ -72,11 +72,17 @@ class Data:
         return m
 
     def store_prices(self, store, clubs=()):
-        """מחירי הסניף; לחבר מועדון של הרשת – משולב עם מחירי המועדון"""
+        """מחירי הסניף לרגע זה: מחיר רגיל + מבצעים שעדיין בתוקף (ולחבר מועדון של הרשת – גם מבצעי מועדון)"""
         P = self.prices(store["blob"])
-        if store.get("cblob", -1) >= 0 and store["chain"] in clubs:
-            C = self.prices(store["cblob"])
-            P = dict(P); P.update({i: v for i, v in C.items() if v < P.get(i, 1e9)})
+        layers = []
+        if store.get("pblob", -1) >= 0: layers.append(self.prices(store["pblob"]))
+        if store.get("cblob", -1) >= 0 and store["chain"] in clubs: layers.append(self.prices(store["cblob"]))
+        if not layers: return P
+        now = int(time.time() // 60); P = dict(P)
+        for L in layers:
+            for i, v in L.items():
+                p, end = v if isinstance(v, tuple) else (v, 2 ** 32)
+                if end >= now and p < P.get(i, 1e9): P[i] = p
         return P
 
     def price(self, store, i):
@@ -166,17 +172,22 @@ def _from_bin(path):
         n = struct.unpack("<I", raw[:4])[0]
         d = array.array("H"); d.frombytes(raw[4:4 + 2 * n])
         p = array.array("I"); p.frombytes(raw[4 + 2 * n:4 + 6 * n])
+        ends = None
+        if len(raw) >= 4 + 10 * n and n:          # שכבת מבצעים – עם תוקף
+            ends = array.array("I"); ends.frombytes(raw[4 + 6 * n:4 + 10 * n])
         out = {}; i = 0
         for k in range(n):
-            i += d[k]; out[i] = p[k] / 100
+            i += d[k]; out[i] = (p[k] / 100, ends[k]) if ends is not None else p[k] / 100
         return out
 
     stores = []
     for row in h["stores"]:
         key, chain, name, addr, city, lat, lng, blob, ts, prec = row[:10]
         cblob = row[10] if len(row) > 10 else -1
+        pblob = row[11] if len(row) > 11 else -1
         n, a = _display(chain, name, addr, city)
-        stores.append({"key": key, "chain": chain, "n": n, "a": a, "p": [lat, lng], "blob": blob, "ts": ts, "prec": prec, "cblob": cblob})
+        stores.append({"key": key, "chain": chain, "n": n, "a": a, "p": [lat, lng], "blob": blob, "ts": ts, "prec": prec,
+                       "cblob": cblob, "pblob": pblob})
     return Data(h["items"], stores, h["v"], h.get("built", ""), reader, "remote")
 
 
