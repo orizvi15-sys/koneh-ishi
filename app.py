@@ -441,9 +441,9 @@ def ask(to, step, u, intro=""):
         send_buttons(to, "⏱️ *כמה רחוק שווה לך לנסוע?*", [("r5", "עד 5 דקות"), ("r15", "עד 15 דקות"), ("rall", "לא משנה")])
     elif step == "hh":
         send_buttons(to, "👨‍👩‍👧 *כמה אנשים בבית?*", [("hh12", "1–2"), ("hh34", "3–4"), ("hh5", "5+")])
-    elif step == "brand":
-        send_buttons(to, "🏷️ *מותג קבוע או הכי זול?*",
-                     [("bmine", "המותג שאני רגיל אליו"), ("bcheap", "הכי זול מאותו סוג"), ("bdep", "תלוי במוצר")])
+    elif step == "clubq":
+        send_buttons(to, "💳 *יש לך מועדון לקוחות באחת הרשתות?*",
+                     [(f"club:{c}", c) for c in club_chains()] + [("club:none", "אין לי מועדון")])
     elif step == "kosher":
         send_buttons(to, "✡️ *יש העדפת כשרות?*", [("kreg", "רגיל"), ("kmeh", "מהדרין בלבד")])
     elif step == "split":
@@ -473,7 +473,7 @@ def finish(to, u, redo=False):
     if len(u["hist"]) == 1:
         send_text(to, "_שמרתי את הקנייה כדי ללמוד את ההרגלים שלך. מתי שרוצים – פשוט כותבים *היי* 🙂_")
     pr = u["prefs"]; n = len(u["hist"])
-    if n >= 1 and "clubs" not in pr:                       # אחרי הקנייה הראשונה
+    if n >= 1 and "clubs" not in pr:                       # משתמשים ותיקים שלא נשאלו בפתיחה
         pr["clubs"] = []; return ask_clubs(to, u, first=True)
 
 
@@ -591,10 +591,17 @@ def _reminder_loop():
                 print("reminder error", to, ex, flush=True)
 
 CLUBS = ["שופרסל", "רמי לוי", "יוחננוף", "אושר עד", "ויקטורי", "טיב טעם"]
+def club_chains():
+    """רשתות שיש לנו בנתונים מחירי מועדון שלהן – לפי מספר סניפים"""
+    D = kdata.D; cnt = {}
+    for st in (D.stores if D else []):
+        if st.get("cblob", -1) >= 0: cnt[st["chain"]] = cnt.get(st["chain"], 0) + 1
+    return [c for c, n in sorted(cnt.items(), key=lambda x: -x[1])][:7] or CLUBS
+
 def ask_clubs(to, u, first=False):
     u["step"] = "clubs"; save_users()
-    return send_buttons(to, "שאלה קטנה אחרונה 🙂 *באיזה מועדון לקוחות אתה חבר?*",
-                        [(f"club:{c}", c) for c in CLUBS] + [("club:none", "אף אחד")])
+    return send_buttons(to, "💳 *יש לך מועדון לקוחות באחת הרשתות?*",
+                        [(f"club:{c}", c) for c in club_chains()] + [("club:none", "אין לי מועדון")])
 
 def understood_text(u, missed=()):
     L = ["🧾 *הבנתי כך:*"]
@@ -673,7 +680,7 @@ def handle(msg):
         return send_location_request(to, "כדי לדעת מאיפה אתה יוצא, צריך מיקום 📍 לוחצים על הכפתור:")
     if reply in ("car", "walk", "bus"): pr["mode"] = reply; return ask(to, "range", u)
     if reply in ("r5", "r15", "rall"): pr["maxMin"] = {"r5": 6, "r15": 16, "rall": 999}[reply]; return ask(to, "hh", u)
-    if reply in HH and u["step"] == "hh": pr["hh"] = reply; return ask(to, "brand", u)
+    if reply in HH and u["step"] == "hh": pr["hh"] = reply; pr.setdefault("brand", "cheap"); return ask(to, "clubq", u)
     if reply in ("bmine", "bcheap", "bdep"):
         pr["brand"] = reply[1:]; return ask(to, "kosher", u)
     if reply in ("kreg", "kmeh") and u["step"] == "kosher":
@@ -683,6 +690,7 @@ def handle(msg):
     if reply and reply.startswith("club:"):
         c = reply[5:]
         pr["clubs"] = [] if c == "none" else [c]
+        if u["step"] == "clubq": return ask(to, "kosher", u)
         u["step"] = "done"; save_users()
         return send_text(to, "תודה, רשמתי 👍")
     if reply in ("kreg", "kmeh"):
