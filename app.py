@@ -210,13 +210,17 @@ def download_media(media_id):
     return data, meta.get("mime_type", "image/jpeg")
 
 # ---------- Claude (לא חובה) ----------
+NO_TEMP = False
+
 def claude_json(prompt, image=None, mime="image/jpeg", keep_dict=False):
+    global NO_TEMP
     if not CLAUDE_KEY:
         return None
     content = [{"type": "text", "text": prompt}]
     if image:
         content.insert(0, {"type": "image", "source": {"type": "base64", "media_type": mime, "data": base64.b64encode(image).decode()}})
     body = {"model": CLAUDE_MODEL, "max_tokens": 8000, "messages": [{"role": "user", "content": content}]}
+    if not NO_TEMP: body["temperature"] = 0           # אותה רשימה → אותה תשובה
     req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=json.dumps(body).encode(),
         headers={"x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"})
     try:
@@ -224,7 +228,10 @@ def claude_json(prompt, image=None, mime="image/jpeg", keep_dict=False):
         txt = "".join(b.get("text", "") for b in res.get("content", []) if b.get("type") == "text")
         if res.get("stop_reason") == "max_tokens": print("Claude: reply cut at max_tokens", flush=True)
     except urllib.error.HTTPError as e:
-        print("Claude error", e.code, e.read()[:500], flush=True); return None
+        err = e.read()[:500]; print("Claude error", e.code, err, flush=True)
+        if e.code == 400 and b"temperature" in err:      # מודל שלא מקבל temperature – בלי
+            NO_TEMP = True; return claude_json(prompt, image, mime, keep_dict)
+        return None
     except Exception as e:
         print("Claude error", e, flush=True); return None
     m = re.search(r"[\[{].*[\]}]", txt, re.S)
@@ -241,7 +248,10 @@ RECEIPT_PROMPT = ('Extract the purchased products from this Israeli supermarket 
                   'discounts (הנחה), deposits (פיקדון), bags (שקית), payment, change and VAT lines, and prices. Reply with only a JSON object like '
                   '{"store":"רמי לוי – סניף מודיעין, עמק איילון 30 מודיעין","items":[{"name":"חלב 3% 1 ליטר","qty":2}]} — "store" = the chain, '
                   'branch name and address/city printed on the receipt (empty string if this is a list, not a receipt); "name" in Hebrew as written, '
-                  '"qty" = number of units (from ×2 / x2 / 2 יח), or kilograms for weighed produce if shown; default 1. '
+                  '"qty" = number of PACKAGES bought (from ×2 / x2 / "2 חבילות" / "2 שקיות" / "3 בקבוקים" of one product), or kilograms for weighed produce if shown; default 1. '
+                  'A size or count INSIDE one package is part of the name, NOT qty: "נייר טואלט – 12 גלילים" = {"name":"נייר טואלט 12 גלילים","qty":1}, '
+                  '"ביצים – 12 יחידות" = {"name":"ביצים 12 יחידות","qty":1}, "מים מינרליים – שישייה" = qty 1, "קמח – 1 ק\"ג" = {"name":"קמח 1 ק\"ג","qty":1}. '
+                  'Be consistent: the same input must always give the same output. '
                   'Photos are often blurry, dark, crooked or crumpled: extract every product line you can read with reasonable confidence, '
                   'skip lines you cannot read, never invent products. Also add "quality": "ok" (everything readable), "partial" (some lines '
                   'unreadable or the receipt is cut off) or "bad" (almost nothing readable), and "issue": one of "dark", "blurry", "cut", '
@@ -859,7 +869,8 @@ intent is one of:
  "price"  – asks the price of ONE product or where it is cheapest ("כמה עולה קוטג'?", "איפה הכי זול חלב").
  "chat"   – anything else: thanks, greetings, choosing a store ("נלך על רמי לוי"), questions about the bot.
 items: product names in Hebrew, with obvious typos corrected ("במבע"→"במבה", "חלן"→"חלב", "קוטג"→"קוטג'"), WITHOUT quantity words; qty = units, but for meat/chicken/fish/produce
-sold by weight qty is kilograms ("קילו"=1, "חצי קילו"=0.5, "300 גרם"=0.3, "2 קילו"=2). Empty list for chat.
+sold by weight qty is kilograms ("קילו"=1, "חצי קילו"=0.5, "300 גרם"=0.3, "2 קילו"=2). A count inside ONE package stays in the name, not qty
+("נייר טואלט 12 גלילים" → qty 1, "ביצים 12" → qty 1). Empty list for chat.
 reply: only for chat – a short warm Hebrew reply (max 2 short sentences), e.g. wish good shopping if they chose a store,
 or explain they can send a list, a receipt photo or ask "כמה עולה X". Never invent prices."""
 
