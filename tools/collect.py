@@ -7,6 +7,7 @@
   python tools/collect.py --parse-only DIR CHAIN OUT    # עיבוד בלבד של קבצים שכבר הורדו (לבדיקות)
 """
 import glob, gzip, io, json, os, re, sys, time, zipfile
+from collections import Counter
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 
@@ -77,6 +78,18 @@ MEAT = [
 ]
 MEAT_RX = [(f"M{i:02d}", n, re.compile(rx), lo, hi) for i, (n, rx, lo, hi) in enumerate(MEAT, 1)]
 MEAT_WORDS = re.compile(r"עוף|בקר|טחון|הודו|כבש|סלמון|אמנון|מושט|דג |דניס|לברק|בורי|קרפיון|הייק|בקלה|פרגי|שניצל|אנטריקוט|כרעי|שוק|כנפ|גבינ|צהובה|בולגרית|פטה|מלוחה|צפתית")
+
+# כל שאר המוצרים שנמכרים במשקל – מפתח מנורמל לפי השם, כדי לאחד בין רשתות ("שקדים טבעיים במשקל" = "שקדים טבעיים")
+W_DROP = re.compile(r'(?<![א-ת])(במשקל|משקל|לק"?ג|ק"?ג|קג|קילו|ל-?\s?ק"?ג|טרי(ים|ה|ות)?|מובחר(ים|ת|ות)?|ארוז(ים|ה)?|תפזורת|בתפזורת|'
+                    r'מהדרין|בד"?ץ|כשר(ה)?|גלאט|איכות|סוג|א\'|פרימיום|שקיל|יח\'|יחידה|מבצע|חדש|ישראל|תוצרת|מארץ|ישראלי(ת|ים)?)(?![א-ת])')
+def wkey(name):
+    n = clean_produce(name).replace("״", '"').replace("׳", "'")
+    if re.search(r"100\s*(ג|גר|גרם)(?![א-ת])", n): return None        # מחיר ל-100 גרם – לא משווים עם מחיר לק"ג
+    n = W_DROP.sub(" ", n)
+    n = re.sub(r"[^\w%\s]", " ", n)
+    toks = [t for t in n.split() if not t.isdigit() and len(t) > 1]
+    if not toks or not re.search(r"[א-ת]{2}", toks[0]): return None
+    return " ".join(toks[:4])
 
 # מוצרי יסוד שלכל רשת יש להם קוד פנימי משלה – מתאימים לפי שם (לא רק שקילים)
 STAPLES = [("E01", "ביצים L (12 יח')", re.compile(r"^(12\s*)?ביצ(י|ים|ה)\b.*(\bL\b|גדול)")),
@@ -275,7 +288,7 @@ def build_chain(files, chain, cities, now=None):
             print("promo parse error", f, ex)
 
     names, prices, promo, club = {}, {}, {}, {}
-    meat_seen = set()
+    meat_seen = set(); wdisp = {}
     for key, items in per_store.items():
         row, prow, crow = {}, {}, {}
         for code, it in items.items():
@@ -293,6 +306,13 @@ def build_chain(files, chain, cities, now=None):
                    for mc, mn, R, lo, hi in MEAT_RX]
         for it in items.values():                               # דוגמאות לבדיקה: שמות בשר/עוף במשקל
             if it["w"] and MEAT_WORDS.search(it["name"]) and len(meat_seen) < 250: meat_seen.add(f'{clean_produce(it["name"])} | {it["price"]}')
+        used = {id(it) for gc, its in groups for it in its}
+        wg = {}
+        for it in items.values():                               # שאר המוצרים במשקל – קבוצה לכל שם מנורמל
+            if not it["w"] or id(it) in used or not (2 <= it["price"] <= 600): continue
+            k = wkey(it["name"])
+            if k: wg.setdefault("W:" + k, []).append(it); wdisp.setdefault("W:" + k, Counter())[clean_produce(it["name"])] += 1
+        groups += list(wg.items())
         for gc, its in groups:
             if not its: continue
             row[gc] = min(it["price"] for it in its)
@@ -303,7 +323,8 @@ def build_chain(files, chain, cities, now=None):
         if crow: club[key] = crow
     for pc, pn, R in PRODUCE_RX: names[pc] = f'{pn} (לק"ג)'
     for sc, sn, R in STAPLES: names[sc] = sn
-    for mc, mn, R, lo, hi in MEAT_RX: names[mc] = f'{mn} (לק"ג)'
+    for mc, mn, R, lo, hi in MEAT_RX: names[mc] = mn.replace(" (במשקל)", "") + ' (לק"ג)'
+    for wc, cnt in wdisp.items(): names[wc] = re.sub(r"\s*(במשקל|לק\"?ג)\s*", " ", cnt.most_common(1)[0][0]).strip() + ' (לק"ג)'
     for key in prices:
         stores.setdefault(key, {"name": "", "addr": "", "city": "", "sub": ""})
     chain_he = {}

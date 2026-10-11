@@ -258,7 +258,13 @@ def main():
     avail = Counter()
     for k in located:
         avail.update(prices[k].keys())
-    pcodes = sorted(c for c in avail if not c[0].isdigit())
+    wch = defaultdict(set)                                   # מוצרי משקל שאוחדו לפי שם – באילו רשתות הם מופיעים
+    for k in located:
+        for c in prices[k]:
+            if c.startswith("W:"): wch[c].add(stores[k].get("chain", ""))
+    wok = sorted((c for c in wch if (len(wch[c]) >= 2 and avail[c] >= 4) or avail[c] >= 8), key=lambda c: -avail[c])[:6000]
+    print("weighed items grouped by name:", len(wch), "kept:", len(wok), "in 2+ chains:", sum(1 for c in wok if len(wch[c]) >= 2))
+    pcodes = sorted(c for c in avail if not c[0].isdigit() and not c.startswith("W:")) + wok
     codes = [c for c, n in avail.most_common() if c[0].isdigit() and n >= 3]
     codes = pcodes + codes[: MAX_ITEMS - len(pcodes)]
     codes = pcodes + sorted(codes[len(pcodes):], key=lambda c: -avail[c])
