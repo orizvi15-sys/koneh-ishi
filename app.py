@@ -1028,7 +1028,8 @@ def handle(msg):
     if u["step"] == "loc":
         return send_location_request(to, "כדי לדעת מאיפה אתה יוצא, צריך מיקום 📍 לוחצים על הכפתור:")
     if reply in ("car", "walk", "bus"):   # בלי שאלת טווח: ברכב – כל הסניפים הקרובים (עלות הנסיעה כבר בחישוב), ברגל/בתחבורה ציבורית – טווח סביר
-        pr["mode"] = reply; pr["maxMin"] = {"car": 999, "walk": 20, "bus": 45}[reply]; return ask(to, "hh", u)
+        pr["mode"] = reply; pr["maxMin"] = {"car": 999, "walk": 20, "bus": 45}[reply]
+        pr.setdefault("brand", "cheap"); return ask(to, "clubq", u)   # בלי שאלת "כמה אנשים" – נשאל רק אם יבקשו "סל שבועי"
     if reply in ("r5", "r15", "rall"): pr["maxMin"] = {"r5": 6, "r15": 16, "rall": 999}[reply]; return ask(to, "hh", u)
     if reply in HH and u["step"] == "hh": pr["hh"] = reply; pr.setdefault("brand", "cheap"); return ask(to, "clubq", u)
     if reply in ("bmine", "bcheap", "bdep"):
