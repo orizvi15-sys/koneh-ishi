@@ -269,6 +269,23 @@ def main():
     located = {k: s for k, s in stores.items() if s.get("p")}
     print("located", len(located), "of", len(stores), "geocode queries used", a.max_geocode - q_left)
 
+    # ---- בדיקת תקינות מחירים: מחיר שרחוק פי 3 ומעלה מהחציון הארצי של אותו מוצר – כנראה טעות (יחידה/מארז/הקלדה) ----
+    import statistics
+    vals = defaultdict(list)
+    for k in located:
+        for c, p in prices[k].items(): vals[c].append(p)
+    med = {c: statistics.median(v) for c, v in vals.items() if len(v) >= 5}
+    qa_removed, qa_chain, qa_ex = 0, Counter(), []
+    for k in located:
+        bad = [c for c, p in prices[k].items() if c in med and med[c] > 0 and (p < med[c] / 3 or p > med[c] * 3)]
+        if not bad: continue
+        prices[k] = {c: p for c, p in prices[k].items() if c not in set(bad)}
+        qa_removed += len(bad); qa_chain[stores[k]["chain"]] += len(bad)
+        for c in bad[:2]:
+            if len(qa_ex) < 30: qa_ex.append([stores[k]["chain"], stores[k]["name"], c, vals[c] and med[c]])
+    print("QA: removed", qa_removed, "suspicious prices", dict(qa_chain))
+    qa = {"removed": qa_removed, "by_chain": dict(qa_chain), "examples": qa_ex}
+
     # ---- קטלוג מוצרים ----
     avail = Counter()
     for k in located:
@@ -346,7 +363,7 @@ def main():
 
     ver = datetime.now(IL).strftime("%Y%m%d%H%M")
     header = {"fmt": 2, "v": ver, "built": datetime.now(IL).isoformat(timespec="minutes"), "items": items, "stores": store_rows,
-              "blobs": blobs, "chains": chains}
+              "blobs": blobs, "chains": chains, "qa": qa}
     hz = zlib.compress(json.dumps(header, ensure_ascii=False, separators=(",", ":")).encode(), 9)
     with open(a.out, "wb") as f:
         f.write(b"KISH" + struct.pack("<I", len(hz)) + hz + bytes(body))
@@ -372,6 +389,7 @@ def main():
                 if x.get("errors") and (not x.get("ok") or why): why += " — " + " / ".join(e.replace("|", "/") for e in x["errors"][-2:])
                 L.append(f"| {x['chain']} | {'✅' if x.get('ok') and not x.get('reason') else ('⚠️' if x.get('ok') else '❌')} | "
                          f"{x.get('stores_with_prices', 0)}/{x.get('stores_listed', 0)} | {x.get('files', 0)} | {why[:400]} |")
+        L += ["", "## בדיקת תקינות מחירים", "", f"הוסרו **{qa['removed']}** מחירים חשודים (פי 3 ומעלה מהחציון הארצי): {qa['by_chain']}"]
         open(a.summary, "w", encoding="utf-8").write("\n".join(L) + "\n")
 
 

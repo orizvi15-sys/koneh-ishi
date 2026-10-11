@@ -57,7 +57,7 @@ class Data:
     def __init__(self, items, stores, version, built, blob_reader, source):
         self.items, self.stores, self.version, self.built, self.source = items, stores, version, built, source
         self._blob = blob_reader
-        self.chains = {}
+        self.chains = {}; self.qa = {}
         self.code2i = {it[0]: i for i, it in enumerate(items)}
         self.name2i = {}
         for i, it in enumerate(items): self.name2i.setdefault(it[1], i)
@@ -239,6 +239,7 @@ def _from_bin(path):
                        "cblob": cblob, "pblob": pblob, "mblob": mblob, "cmblob": cmblob})
     D_ = Data(h["items"], stores, h["v"], h.get("built", ""), reader, "remote")
     D_.chains = h.get("chains", {})
+    D_.qa = h.get("qa", {})
     return D_
 
 

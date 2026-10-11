@@ -675,7 +675,9 @@ def stats_text():
          f"⏰ תזכורות פעילות: {sum(1 for u in us.values() if u.get('remind_at') and not u.get('prefs', {}).get('remind_off'))}"]
     if clubs: L.append("💳 מועדונים: " + ", ".join(f"{c} {n}" for c, n in sorted(clubs.items(), key=lambda x: -x[1])))
     iss = watchdog_issues()
+    qa = getattr(D, "qa", {}) or {}
     L += ["", "🛡️ " + ("הכל תקין" if not iss else f"{len(iss)} התראות:")] + iss
+    if qa.get("removed") is not None: L.append(f"🧪 בדיקת מחירים: הוסרו {qa['removed']:,} מחירים חשודים בעדכון האחרון")
     if D:
         L += ["", f"📦 נתונים: {len(D.stores):,} סניפים · {len(D.items):,} מוצרים",
               f"🕐 עודכנו: {D.built[8:10]}/{D.built[5:7]} {D.built[11:16]}" if len(D.built) >= 16 else f"🕐 גרסה: {D.version} ({D.source})"]
@@ -731,8 +733,11 @@ def watchdog_issues():
         a = _iso_age_h(info.get("fetched", ""))
         if a is not None and a > 12: out.append(f"⚠️ {he} לא התעדכנה כבר {a:.0f} שעות")
         n = info.get("stores", 0)
-        if seen.get(ch) and n < 0.5 * seen[ch]: out.append(f"⚠️ {he} ירדה מ-{seen[ch]} ל-{n} סניפים")
+        if seen.get(ch) and n < 0.75 * seen[ch]: out.append(f"⚠️ {he} ירדה מ-{seen[ch]} ל-{n} סניפים")
         elif n: seen[ch] = max(n, int(seen.get(ch, 0) * 0.9))
+    qa = getattr(D, "qa", {}) or {}
+    for ch, n in (qa.get("by_chain") or {}).items():     # בדיקת תקינות: הרבה מחירים חשודים ברשת אחת = כנראה קובץ פגום
+        if n >= 1500: out.append(f"⚠️ {ch}: {n:,} מחירים חשודים הוסרו בעדכון האחרון (כנראה קובץ פגום אצל הרשת)")
     return out
 
 def watchdog():
