@@ -91,6 +91,44 @@ def google(q):
     return None
 
 
+ABBR = {'ת"א': "תל אביב - יפו", "תא": "תל אביב - יפו", 'ב"ש': "באר שבע", 'פ"ת': "פתח תקווה", 'ראשל"צ': "ראשון לציון",
+        'ר"ג': "רמת גן", 'ק"ש': "קריית שמונה", 'ק. גת': "קריית גת", "ירושלים": "ירושלים",
+        "מודיעין": "מודיעין-מכבים-רעות", "קדימה": "קדימה-צורן", "פרדס חנה": "פרדס חנה-כרכור", "דלית אל כרמל": "דאלית אל-כרמל",
+        "חצור הגלילית": "חצור הגלילית", "מודיעין עלית": "מודיעין עילית", "מודיעין עילית": "מודיעין עילית"}
+AMBIG = {"כרמל", "אזור", "רמות", "מגדל", "עין", "שורש", "לכיש", "גבעת", "נווה", "כפר", "מרכז", "צומת", "בית", "חצור", "רמת", "עזר", "שמיר", "ספיר", "סגולה"}   # מילים שהן גם שם יישוב קטן
+
+
+def make_city_finder(cities):
+    """מוצא שם עיר בתוך שם הסניף/הכתובת (כשהקובץ לא כולל עיר) – 'יוחננוף טבריה תחתית' → טבריה"""
+    names = {}
+    for n in set(cities.values()):
+        base = re.sub(r"\s+[-–]\s+.*$|\s*\(.*$", "", n).strip()   # "תל אביב - יפו" → "תל אביב"
+        for x in {n, base}:
+            if len(x) >= 3 and x not in AMBIG: names[x] = n
+    order = sorted(names, key=len, reverse=True)
+    def find1(t, street):
+        t = f" {t} "; hits = []               # כל ההתאמות – בוחרים את זו שמופיעה ראשונה (ואם שוויון – הארוכה)
+        for a, full in list(ABBR.items()) + list(names.items()):
+            if street and a in STREET_WORDS: continue
+            for m in re.finditer(rf"(?<![א-ת]){re.escape(a)}(?![א-ת])", t):
+                if street and re.search(r"(שדרות|שד'|רחוב|רח'|דרך|כביש|צומת|מחלף|כיכר)\s*$", t[:m.start()]): continue
+                hits.append((m.start(), -len(a), full)); break
+        return min(hits)[2] if hits else ""
+    def find(name, addr=""):        # רק משם הסניף – בכתובת שם עיר הוא לרוב שם רחוב ("רחוב תל אביב 11" בחיפה)
+        return find1(name or "", False)
+    return find
+
+
+STREET_WORDS = {"שדרות", "גבעת", "נווה", "כפר", "רמת", "קריית", "מצפה", "עין", "בית"}
+
+
+def dist_km(a, b):
+    import math
+    la1, lo1, la2, lo2 = map(math.radians, (a[0], a[1], b[0], b[1]))
+    h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
+    return 12742 * math.asin(math.sqrt(h))
+
+
 def clean_addr(a):
     a = re.sub(r"\b(רח'?|רחוב|שד'?|שדרות|שד\.)\s+", "", a or "")
     a = re.sub(r"\s*(,|-)?\s*(מרכז מסחרי|קניון|מתחם|א\.?ת\.?|אזור התעשייה|אזור תעשייה|פינת).*$", "", a)
@@ -148,9 +186,11 @@ def main():
         t_last = time.time()
         return nominatim(q)
 
+    find_city = make_city_finder(cities) if cities else (lambda *a: "")
     for k, s in stores.items():
         c = s.get("city", "")
         if c.isdigit(): c = cities.get(str(int(c)), "")
+        if not c: c = find_city(s["name"].replace(s["chain"], " "), s["addr"])          # אין עיר בקובץ – מנסים לזהות משם הסניף
         s["city"] = c
         if k in OVERRIDES: s["p"] = OVERRIDES[k]; s["prec"] = "manual"; continue
         ck = f"{s['chain']}|{s['name']}|{s['addr']}|{c}"
@@ -177,6 +217,27 @@ def main():
         if not p and s["name"]: p = geocode(f"{s['name']}"); prec = "name"
         geo[ck] = [p, prec] if p else None
         if p: s["p"], s["prec"] = p, prec
+    # ---- בדיקת שפיות: סניף שהמיקום שלו רחוק מהעיר שלו (למשל "יהודה הלוי 113" שנמצא בת"א במקום בטבריה) ----
+    # מרכז העיר = חציון המיקומים של הסניפים בה (עמיד יותר מחיפוש שם העיר, שלפעמים מחזיר מקום אחר באותו שם)
+    import statistics
+    pts = {}
+    for s in stores.values():
+        if s.get("city") and s.get("p") and s.get("prec") in ("address", "google", "manual"): pts.setdefault(s["city"], []).append(s["p"])
+    def center(c):
+        L = pts.get(c, [])
+        if len(L) >= 3: return [statistics.median(x[0] for x in L), statistics.median(x[1] for x in L)]
+        if c not in city_geo and q_left > 0: city_geo[c] = geocode(c)
+        return city_geo.get(c)
+    bad = 0
+    for k, s in stores.items():
+        c = s.get("city"); p = s.get("p")
+        if not c or not p or s.get("prec") in ("manual", "city", "google"): continue
+        cc = center(c)
+        if cc and dist_km(p, cc) > 20:
+            bad += 1; print("far from its city:", s["chain"], s["name"], s["addr"], c, round(dist_km(p, cc)), "km")
+            s["p"], s["prec"] = cc, "city"
+    print("stores moved to their city center:", bad)
+
     # ---- Google: שיפור סניפים שמיקומם רק ברמת עיר/שם (פעם אחת לכל סניף, נשמר במטמון) ----
     if GKEY:
         gdone = geo.setdefault("_g", {}); used = 0
