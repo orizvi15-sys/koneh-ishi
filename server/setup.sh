@@ -7,9 +7,12 @@ apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git 
 fallocate -l 2G /swapfile 2>/dev/null && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab || true
 if [ -d /opt/koneh/.git ]; then git -C /opt/koneh pull -q; else git clone -q https://github.com/orizvi15-sys/koneh-ishi /opt/koneh; fi
 cd /opt/koneh
-python3 -m venv /opt/koneh/venv
-/opt/koneh/venv/bin/pip install -q --upgrade pip
-/opt/koneh/venv/bin/pip install -q "git+https://github.com/OpenIsraeliSupermarkets/israeli-supermarket-scarpers.git"
+# הספרייה דורשת Python 3.12 (המערכת מגיעה עם גרסה חדשה מדי) – מתקינים 3.12 בנפרד עם uv
+command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh >/dev/null
+export UV_PYTHON_INSTALL_DIR=/opt/koneh/python
+rm -rf /opt/koneh/venv
+uv venv -q --python 3.12 /opt/koneh/venv
+VIRTUAL_ENV=/opt/koneh/venv uv pip install -q pip "git+https://github.com/OpenIsraeliSupermarkets/israeli-supermarket-scarpers.git"
 /opt/koneh/venv/bin/python -m playwright install --with-deps chromium >/dev/null 2>&1 || true
 touch /opt/koneh/.env && chmod 600 /opt/koneh/.env
 cat > /opt/koneh/run.sh <<'RUN'
