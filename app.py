@@ -442,8 +442,8 @@ def ask(to, step, u, intro=""):
     elif step == "hh":
         send_buttons(to, "👨‍👩‍👧 *כמה אנשים בבית?*", [("hh12", "1–2"), ("hh34", "3–4"), ("hh5", "5+")])
     elif step == "clubq":
-        send_buttons(to, "💳 *יש לך מועדון לקוחות באחת הרשתות?*",
-                     [(f"club:{c}", c) for c in club_chains()] + [("club:none", "אין לי מועדון")])
+        u["club_ctx"] = "onb"
+        send_buttons(to, "💳 *יש לך מועדון לקוחות?*", [("clubyes", "כן"), ("club:none", "לא")])
     elif step == "kosher":
         send_buttons(to, "✡️ *יש העדפת כשרות?*", [("kreg", "רגיל"), ("kmeh", "מהדרין בלבד")])
     elif step == "split":
@@ -598,10 +598,20 @@ def club_chains():
         if st.get("cblob", -1) >= 0: cnt[st["chain"]] = cnt.get(st["chain"], 0) + 1
     return [c for c, n in sorted(cnt.items(), key=lambda x: -x[1])][:7] or CLUBS
 
+MAX_CLUBS = 3
+
 def ask_clubs(to, u, first=False):
-    u["step"] = "clubs"; save_users()
-    return send_buttons(to, "💳 *יש לך מועדון לקוחות באחת הרשתות?*",
-                        [(f"club:{c}", c) for c in club_chains()] + [("club:none", "אין לי מועדון")])
+    u["step"] = "clubq"; u["club_ctx"] = "later"; save_users()
+    return send_buttons(to, "💳 *יש לך מועדון לקוחות?*", [("clubyes", "כן"), ("club:none", "לא")])
+
+def club_buttons(u):
+    have = u["prefs"].get("clubs", [])
+    return [(f"club:{c}", ("✅ " if c in have else "") + c) for c in club_chains()] + [("clubdone", "סיימתי 👍")]
+
+def clubs_done(to, u):
+    if u.get("club_ctx") == "onb": return ask(to, "kosher", u)
+    u["step"] = "done"; save_users()
+    return send_text(to, "תודה, רשמתי 👍")
 
 def understood_text(u, missed=()):
     L = ["🧾 *הבנתי כך:*"]
@@ -687,12 +697,24 @@ def handle(msg):
         pr["kosher"] = reply[1:]; pr.setdefault("splitMin", SPLIT_MIN); pr.pop("remind_off", None)
         return ask(to, "basket", u, intro="מעולה, סיימנו 🎉\n\n")
     if reply in ("s0", "s30", "sno"): pr["splitMin"] = {"s0": SPLIT_MIN, "s30": SPLIT_MIN, "sno": -1}[reply]; return ask(to, "basket", u)
+    if reply == "clubyes":
+        pr["clubs"] = []; u["step"] = "clubpick"; save_users()
+        return send_buttons(to, f"באילו רשתות? (אפשר לבחור עד {MAX_CLUBS})", club_buttons(u))
+    if reply == "clubdone": return clubs_done(to, u)
     if reply and reply.startswith("club:"):
         c = reply[5:]
-        pr["clubs"] = [] if c == "none" else [c]
-        if u["step"] == "clubq": return ask(to, "kosher", u)
-        u["step"] = "done"; save_users()
-        return send_text(to, "תודה, רשמתי 👍")
+        if c == "none":
+            pr["clubs"] = []; return clubs_done(to, u)
+        cl = pr.setdefault("clubs", [])
+        if c in cl: cl.remove(c)
+        else: cl.append(c)
+        save_users()
+        if len(cl) >= MAX_CLUBS: return clubs_done(to, u)
+        if is_tg(to) and msg.get("mid"):   # מסמנים ✅ על אותה הודעה, בלי הודעה חדשה
+            return tg_call("editMessageReplyMarkup", {"chat_id": to[3:], "message_id": msg["mid"],
+                           "reply_markup": {"inline_keyboard": [[tg_btn(i, t) for i, t in club_buttons(u)[k:k + 2]]
+                                                                for k in range(0, len(club_buttons(u)), 2)]}})
+        return send_buttons(to, "עוד רשת? כשמסיימים – *סיימתי*", club_buttons(u))
     if reply in ("kreg", "kmeh"):
         pr["kosher"] = reply[1:]; save_users(); return send_text(to, "רשמתי 👍")
     if reply == "fix" or (reply and reply.startswith(("fix:", "alt:", "del:"))):
@@ -786,7 +808,8 @@ def tg_to_msg(up):
     if "callback_query" in up:
         cq = up["callback_query"]; tg_call("answerCallbackQuery", {"callback_query_id": cq["id"]})
         return {"from": f"tg:{cq['message']['chat']['id']}", "id": "tgc" + cq["id"], "type": "interactive",
-                "name": (cq.get("from") or {}).get("first_name", ""), "interactive": {"button_reply": {"id": cq.get("data", "")}}}
+                "name": (cq.get("from") or {}).get("first_name", ""), "mid": cq["message"].get("message_id"),
+                "interactive": {"button_reply": {"id": cq.get("data", "")}}}
     m = up.get("message") or {}
     if not m: return None
     base = {"from": f"tg:{m['chat']['id']}", "id": f"tg{m['chat']['id']}_{m['message_id']}", "name": (m.get("from") or {}).get("first_name", "")}
