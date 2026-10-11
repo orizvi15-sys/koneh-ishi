@@ -311,22 +311,52 @@ def scrape(chain, dump):
     return files
 
 
+class _Errors:
+    """אוסף הודעות אזהרה/שגיאה מהספרייה כדי לדעת למה רשת נכשלה"""
+    def __init__(self):
+        import logging
+        self.msgs = []
+        h = logging.Handler(level=logging.WARNING)
+        h.emit = lambda r: self.msgs.append(f"{r.levelname}: {r.getMessage()}"[:300])
+        logging.getLogger("Logger").addHandler(h); logging.getLogger().addHandler(h)
+
+
+def write_status(outdir, chain, **kw):
+    os.makedirs(outdir, exist_ok=True)
+    json.dump(dict(chain=chain, at=datetime.now(IL).isoformat(timespec="minutes"), **kw),
+              open(os.path.join(outdir, f"status-{chain}.json"), "w", encoding="utf-8"), ensure_ascii=False)
+
+
 def main():
+    if sys.argv[1] == "--status-only":  # הסקריפט קרס – לפחות לרשום שנכשל
+        write_status(sys.argv[3], sys.argv[2], ok=False, reason="הסקריפט קרס – ראו לוג ההרצה", files=0)
+        return
     if sys.argv[1] == "--parse-only":
         d, chain, out = sys.argv[2], sys.argv[3], sys.argv[4]
         files = [f for f in glob.glob(d + "/**/*", recursive=True) if os.path.isfile(f)]
+        outdir, errs, t0 = os.path.dirname(out) or ".", None, time.time()
     else:
         chain, outdir = sys.argv[1], sys.argv[2]
         out = os.path.join(outdir, f"chain-{chain}.json.gz")
-        t0 = time.time(); files = []
+        t0 = time.time(); files = []; errs = _Errors()
         for name in [chain] + FALLBACKS.get(chain, []):
             dump = os.path.abspath(f"dumps/{name}")
             try: files = scrape(name, dump)
-            except Exception as ex: print("scrape error", name, ex)
-            if any("pricefull" in os.path.basename(f).lower() or "price_full" in os.path.basename(f).lower() for f in files): break
+            except Exception as ex:
+                print("scrape error", name, ex); errs.msgs.append(f"EXCEPTION ({name}): {ex!r}"[:300])
+            if any(_is_price(f) for f in files): break
         print(f"{chain}: {len(files)} files in {time.time() - t0:.0f}s", flush=True)
     data = build_chain(files, chain, load_cities())
-    print(json.dumps(data["stats"], ensure_ascii=False), flush=True)
+    st = data["stats"]
+    print(json.dumps(st, ensure_ascii=False), flush=True)
+    reason = ""
+    if not files: reason = "לא הורדו קבצים בכלל (אתר חסום מחוץ לישראל / לא זמין / שינה מבנה)"
+    elif not st["price_files"]: reason = "הורדו קבצים אבל אין ביניהם קבצי מחירים מלאים"
+    elif not data["prices"]: reason = "קבצי מחירים הורדו אבל לא נקראו (מבנה קובץ לא מוכר)"
+    elif st["stores_listed"] and st["stores_with_prices"] < 0.5 * st["stores_listed"]:
+        reason = f"רק {st['stores_with_prices']} מתוך {st['stores_listed']} סניפים קיבלו מחירים"
+    write_status(outdir, chain, ok=bool(data["prices"]), reason=reason, files=len(files), seconds=round(time.time() - t0),
+                 errors=(errs.msgs[-6:] if errs else []), **st)
     if not data["prices"]:
         print("no prices – not writing output"); sys.exit(0)
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)

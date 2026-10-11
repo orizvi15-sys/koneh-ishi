@@ -46,10 +46,12 @@ jobs:
           pip install -q "git+https://github.com/OpenIsraeliSupermarkets/israeli-supermarket-scarpers.git"
           python -m playwright install --with-deps chromium >/dev/null 2>&1 || true
       - name: Download and process ${{ matrix.chain }}
-        run: python tools/collect.py ${{ matrix.chain }} out
+        run: python tools/collect.py ${{ matrix.chain }} out || python tools/collect.py --status-only ${{ matrix.chain }} out
       - name: Upload to release
-        if: hashFiles('out/*.json.gz') != ''
-        run: gh release upload "$REL" out/*.json.gz --clobber -R "$GITHUB_REPOSITORY"
+        if: always()
+        run: |
+          ls out 2>/dev/null || exit 0
+          gh release upload "$REL" out/* --clobber -R "$GITHUB_REPOSITORY"
 
   build:
     needs: collect
@@ -64,6 +66,7 @@ jobs:
         run: |
           mkdir -p in
           gh release download "$REL" -p 'chain-*.json.gz' -D in -R "$GITHUB_REPOSITORY"
+          gh release download "$REL" -p 'status-*.json' -D in -R "$GITHUB_REPOSITORY" || true
           gh release download "$REL" -p geocache.json -D . -R "$GITHUB_REPOSITORY" || true
           gh release download "$REL" -p cities.json -D . -R "$GITHUB_REPOSITORY" || true
           ls -la in

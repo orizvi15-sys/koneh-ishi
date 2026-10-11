@@ -211,6 +211,17 @@ def main():
         L += [f"| {c} | {n} |" for c, n in by_chain.most_common()]
         L += ["", "| מקור (scraper) | עודכן | סניפים | קבצים |", "|---|---|---|---|"]
         L += [f"| {c} | {v['fetched']} | {v['stores']} | {(v.get('stats') or {}).get('price_files', '')} |" for c, v in sorted(chains.items())]
+        sts = []
+        for f in sorted(glob.glob(os.path.join(a.indir, "status-*.json"))):
+            try: sts.append(json.load(open(f, encoding="utf-8")))
+            except Exception: pass
+        if sts:
+            L += ["", "## מצב כל רשת בהרצה האחרונה", "", "| רשת | מצב | סניפים עם מחירים | קבצים | סיבה / שגיאות |", "|---|---|---|---|---|"]
+            for x in sorted(sts, key=lambda x: (x.get("ok"), x["chain"])):
+                why = x.get("reason") or ""
+                if x.get("errors") and (not x.get("ok") or why): why += " — " + " / ".join(e.replace("|", "/") for e in x["errors"][-2:])
+                L.append(f"| {x['chain']} | {'✅' if x.get('ok') and not x.get('reason') else ('⚠️' if x.get('ok') else '❌')} | "
+                         f"{x.get('stores_with_prices', 0)}/{x.get('stores_listed', 0)} | {x.get('files', 0)} | {why[:400]} |")
         open(a.summary, "w", encoding="utf-8").write("\n".join(L) + "\n")
 
 
