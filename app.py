@@ -207,12 +207,13 @@ def claude_json(prompt, image=None, mime="image/jpeg", keep_dict=False):
     content = [{"type": "text", "text": prompt}]
     if image:
         content.insert(0, {"type": "image", "source": {"type": "base64", "media_type": mime, "data": base64.b64encode(image).decode()}})
-    body = {"model": CLAUDE_MODEL, "max_tokens": 2000, "messages": [{"role": "user", "content": content}]}
+    body = {"model": CLAUDE_MODEL, "max_tokens": 8000, "messages": [{"role": "user", "content": content}]}
     req = urllib.request.Request("https://api.anthropic.com/v1/messages", data=json.dumps(body).encode(),
         headers={"x-api-key": CLAUDE_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json"})
     try:
         res = json.load(urllib.request.urlopen(req, timeout=90))
         txt = "".join(b.get("text", "") for b in res.get("content", []) if b.get("type") == "text")
+        if res.get("stop_reason") == "max_tokens": print("Claude: reply cut at max_tokens", flush=True)
     except urllib.error.HTTPError as e:
         print("Claude error", e.code, e.read()[:500], flush=True); return None
     except Exception as e:
@@ -852,7 +853,7 @@ def handle(msg):
             return send_text(to, "את סוג הקובץ הזה אני לא יודע לקרוא 🙁 שלחו את הקבלה כ*תמונה* רגילה (לא כקובץ).")
         items, store_txt = extract_items(img, mime, with_store=True)
         if not items:
-            return send_text(to, "לא הצלחתי לקרוא את הקבלה. נסה תמונה חדה יותר, או כתוב רשימה.")
+            return send_text(to, "לא הצלחתי לקרוא את הקבלה 🙁\nאם היא ארוכה – שלחו אותה כ*קובץ* (📎 ← קובץ) כדי שטלגרם לא יכווץ אותה, או צלמו בשני חלקים.")
         if not pr.get("home"): u["step"] = "loc"
         u["last_receipt"] = int(time.time()); u["remind_at"] = next_reminder(u["last_receipt"]); u["remind_miss"] = 0
         u["receipts"] = (u.get("receipts", []) + [u["last_receipt"]])[-50:]
