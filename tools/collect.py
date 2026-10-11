@@ -82,12 +82,18 @@ MEAT_WORDS = re.compile(r"עוף|בקר|טחון|הודו|כבש|סלמון|אמ
 # כל שאר המוצרים שנמכרים במשקל – מפתח מנורמל לפי השם, כדי לאחד בין רשתות ("שקדים טבעיים במשקל" = "שקדים טבעיים")
 W_DROP = re.compile(r'(?<![א-ת])(במשקל|משקל|לק"?ג|ק"?ג|קג|קילו|ל-?\s?ק"?ג|טרי(ים|ה|ות)?|מובחר(ים|ת|ות)?|ארוז(ים|ה)?|תפזורת|בתפזורת|'
                     r'מהדרין|בד"?ץ|כשר(ה)?|גלאט|איכות|סוג|א\'|פרימיום|שקיל|יח\'|יחידה|מבצע|חדש|ישראל|תוצרת|מארץ|ישראלי(ת|ים)?)(?![א-ת])')
+def _wstem(w):   # "עגבניות"/"עגבניה" → אותו מפתח
+    if len(w) > 3 and not w.isdigit(): w = re.sub(r"(יות|ות|ים|ייה|יה|ה|י)$", "", w)
+    return w.translate(str.maketrans("ךםןףץ", "כמנפצ"))
+def wname(n):   # שם לתצוגה – בלי "ארוז", "(ק)", "קג", "תפזורת"...
+    n = re.sub(r'\(ק\)|(?<![א-ת])(במשקל|לק"?ג|ק"?ג|קג|תפזורת|בתפזורת|ארוז(ה|ים)?|מובחר(ת|ים)?|שקיל|מחיר ל)(?![א-ת])|[-–]\s*$', " ", n)
+    return " ".join(n.split()).strip(" -–")
 def wkey(name):
     n = clean_produce(name).replace("״", '"').replace("׳", "'")
     if re.search(r"100\s*(ג|גר|גרם)(?![א-ת])", n): return None        # מחיר ל-100 גרם – לא משווים עם מחיר לק"ג
     n = W_DROP.sub(" ", n)
     n = re.sub(r"[^\w%\s]", " ", n)
-    toks = [t for t in n.split() if not t.isdigit() and len(t) > 1]
+    toks = [_wstem(t) for t in n.split() if not t.isdigit() and len(t) > 1]
     if not toks or not re.search(r"[א-ת]{2}", toks[0]): return None
     return " ".join(toks[:4])
 
@@ -324,7 +330,7 @@ def build_chain(files, chain, cities, now=None):
     for pc, pn, R in PRODUCE_RX: names[pc] = f'{pn} (לק"ג)'
     for sc, sn, R in STAPLES: names[sc] = sn
     for mc, mn, R, lo, hi in MEAT_RX: names[mc] = mn.replace(" (במשקל)", "") + ' (לק"ג)'
-    for wc, cnt in wdisp.items(): names[wc] = re.sub(r"\s*(במשקל|לק\"?ג)\s*", " ", cnt.most_common(1)[0][0]).strip() + ' (לק"ג)'
+    for wc, cnt in wdisp.items(): names[wc] = wname(cnt.most_common(1)[0][0]) + ' (לק"ג)'
     for key in prices:
         stores.setdefault(key, {"name": "", "addr": "", "city": "", "sub": ""})
     chain_he = {}

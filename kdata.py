@@ -169,7 +169,8 @@ class Data:
             canon = False
             if f0 and f0 == q0:
                 s += 0.6   # "אורז בסמטי" לפני "קובה אורז"
-                canon = all(w in self.itoks[i] or sw in st for w, sw in zip(q, qs))
+                # התאמה רק לפי גזירה ("חלבה"→"חלב") נחשבת "המוצר הבסיסי" רק למוצרים מאוחדים (ירקות/בשר במשקל)
+                canon = all(w in self.itoks[i] or (sw in st and not it[0][0].isdigit()) for w, sw in zip(q, qs))
             sc = s / (len(q) + 0.3 * len(self.itoks[i])) + 0.35 * it[2] / self.max_avail
             if canon:   # בקשה כללית ("במבה") – המוצר הנפוץ ביותר מהסוג הזה
                 sc += 0.5 + 3.0 * it[2] / self.max_avail
