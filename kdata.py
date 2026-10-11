@@ -249,7 +249,8 @@ def load(force_download=True):
 def start_refresher():
     def loop():
         while True:
-            time.sleep(REFRESH_HOURS * 3600)
+            # אם אנחנו על נתוני גיבוי – מנסים שוב כל 5 דקות, אחרת כל שעה
+            time.sleep(300 if (D is None or D.source != "remote") else REFRESH_HOURS * 3600)
             try: load()
             except Exception as ex: print("refresh error", ex)
     threading.Thread(target=loop, daemon=True).start()
