@@ -156,6 +156,9 @@ def send_text(to, text, menu=False):
     graph_post(f"{PHONE_ID}/messages", {"messaging_product": "whatsapp", "to": to, "type": "text",
                                          "text": {"body": text[:4000], "preview_url": True}})
 
+def typing(to):
+    if is_tg(to): tg_call("sendChatAction", {"chat_id": to[3:], "action": "typing"})
+
 def tg_btn(i, t):
     return {"text": t, "url": i} if i.startswith("http") else {"text": t, "callback_data": i}
 
@@ -458,7 +461,9 @@ def finish(to, u, redo=False):
         for m in res: send_text(to, m)
     else:
         u["last"] = {k: res[k] for k in ("details", "others", "split")}
-        send_buttons(to, res["main"], [("oth", "🏪 הצג סופרים אחרים")])
+        n, miss = len(u["items"]), len(u.get("missed") or [])
+        main = res["main"] + f"\n🧾 זיהיתי {n} מוצרים" + (f" ({miss} לא נמצאו)" if miss else "")
+        send_buttons(to, main, [("seen", "🧾 מה זיהיתי"), ("oth", "🏪 סופרים אחרים")])
     entry = {"d": int(time.time()), "items": [{"code": x.get("code", ""), "name": x["name"], "src": x.get("src", ""), "qty": x["qty"]} for x in u["items"]]}
     if redo and u["hist"]: u["hist"][-1] = entry          # תיקון – מחליפים את הקנייה האחרונה במקום להוסיף
     else: u["hist"] = (u["hist"] + [entry])[-12:]
@@ -470,6 +475,31 @@ def finish(to, u, redo=False):
     if n >= 1 and "clubs" not in pr:                       # אחרי הקנייה הראשונה
         pr["clubs"] = []; return ask_clubs(to, u, first=True)
 
+
+# ---------- לוח בקרה למנהל ----------
+def stats_text():
+    now = time.time(); wk = now - 7 * 86400; day = now - 86400
+    us = {k: v for k, v in USERS.items() if not k.startswith("_") and isinstance(v, dict)}
+    done = [u for u in us.values() if all(k in u.get("prefs", {}) for k in PROFILE_KEYS)]
+    buys = [b["d"] for u in us.values() for b in u.get("hist", [])]
+    rec = [t for u in us.values() for t in u.get("receipts", [])]
+    active = [u for u in us.values() if any(b["d"] > wk for b in u.get("hist", []))]
+    tg = sum(1 for k in us if k.startswith("tg:"))
+    clubs = {}
+    for u in us.values():
+        for c in u.get("prefs", {}).get("clubs") or []: clubs[c] = clubs.get(c, 0) + 1
+    D = kdata.D
+    L = ["📊 *קונה אישי – לוח בקרה*", "",
+         f"👥 משתמשים: *{len(us)}* (טלגרם {tg}) · סיימו הרשמה: {len(done)}",
+         f"🔥 פעילים השבוע: *{len(active)}*",
+         f"🛒 קניות שנבדקו: היום {sum(d > day for d in buys)} · השבוע *{sum(d > wk for d in buys)}* · סה\"כ {len(buys)}",
+         f"🧾 קבלות שנסרקו: היום {sum(t > day for t in rec)} · השבוע *{sum(t > wk for t in rec)}* · סה\"כ {len(rec)}",
+         f"⏰ תזכורות פעילות: {sum(1 for u in us.values() if u.get('remind_at') and not u.get('prefs', {}).get('remind_off'))}"]
+    if clubs: L.append("💳 מועדונים: " + ", ".join(f"{c} {n}" for c, n in sorted(clubs.items(), key=lambda x: -x[1])))
+    if D:
+        L += ["", f"📦 נתונים: {len(D.stores):,} סניפים · {len(D.items):,} מוצרים",
+              f"🕐 עודכנו: {D.built[8:10]}/{D.built[5:7]} {D.built[11:16]}" if len(D.built) >= 16 else f"🕐 גרסה: {D.version} ({D.source})"]
+    return "\n".join(L)
 
 # ---------- תזכורת שבועית ----------
 # קבלה שנסרקה ביום ובשעה מסוימים => תזכורת שבוע אחרי, שעתיים לפני אותה שעה (לא בלילה).
@@ -530,8 +560,7 @@ def got_items(to, u, items):
     found, missed = match_items(items)
     if not found:
         return send_text(to, "לא מצאתי את המוצרים האלה במאגר 🙁 נסה לכתוב אותם קצת אחרת." + (f"\n({', '.join(missed[:8])})" if missed else ""))
-    u["items"] = found
-    send_buttons(to, understood_text(u, missed), [("fix", "✏️ משהו לא נכון")])
+    u["items"] = found; u["missed"] = missed[:8]
     have = {x["code"] for x in found}
     forgot = [x for x in learned(u) if x["code"] not in have and x["freq"] >= 2][:5]
     u["items"] = found
@@ -551,6 +580,14 @@ def handle(msg):
     if msg.get("name"): u["name"] = msg["name"]
     u["remind_miss"] = 0
 
+    if text in ("/stats", "סטטיסטיקה"):
+        meta = USERS.setdefault("_meta", {})
+        admins = set(filter(None, os.environ.get("ADMIN_CHAT", "").split(","))) | set(meta.get("admins", []))
+        if not admins:                       # הראשון ששולח /stats נהיה המנהל
+            meta["admins"] = [to]; save_users(); admins = {to}
+            send_text(to, "רשמתי אותך כמנהל הבוט 🔐 רק אתה תוכל לראות את הנתונים.")
+        if to not in admins: return send_text(to, "לא הבנתי 🙂")
+        return send_text(to, stats_text())
     if text == "מחק אותי":
         USERS.pop(to, None); save_users()
         return send_text(to, "מחקתי את כל המידע שלך 🗑️ כדי להתחיל מחדש כתבו היי.")
@@ -621,8 +658,11 @@ def handle(msg):
         else:
             its.pop(k)
             if not its: u["items"] = []; save_users(); return send_text(to, "הסל ריק עכשיו 🙂 אפשר לכתוב רשימה חדשה.")
-        send_text(to, "עודכן ✅ מחשב מחדש…")
+        typing(to)
         return finish(to, u, redo=True)
+    if reply == "seen":
+        if not u.get("items"): return send_text(to, "אין כרגע סל – כתבו *היי* כדי להתחיל 🙂")
+        return send_buttons(to, understood_text(u, u.get("missed") or []), [("fix", "✏️ משהו לא נכון")])
     if reply == "fixdone":
         return send_text(to, "מעולה 👍")
     if reply in ("det", "oth", "spl"):
@@ -653,7 +693,7 @@ def handle(msg):
     if t == "image":
         if not CLAUDE_KEY:
             return send_text(to, "קריאת קבלות עוד לא מופעלת. אפשר לכתוב את הרשימה בהודעה ✍️")
-        send_text(to, "קורא את הקבלה… ⏳")
+        typing(to) if is_tg(to) else send_text(to, "קורא את הקבלה… ⏳")
         try:
             img, mime = download_media(msg["image"]["id"])
         except Exception as e:
@@ -667,6 +707,7 @@ def handle(msg):
             return send_text(to, "לא הצלחתי לקרוא את הקבלה. נסה תמונה חדה יותר, או כתוב רשימה.")
         if not pr.get("home"): u["step"] = "loc"
         u["last_receipt"] = int(time.time()); u["remind_at"] = next_reminder(u["last_receipt"]); u["remind_miss"] = 0
+        u["receipts"] = (u.get("receipts", []) + [u["last_receipt"]])[-50:]
         return got_items(to, u, items)
     if text:
         if not all(k in pr for k in PROFILE_KEYS):
