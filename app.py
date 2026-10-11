@@ -33,6 +33,7 @@ DRY_RUN = os.environ.get("DRY_RUN") == "1"  # לבדיקות: מדפיס במק�
 import kdata  # הנתונים הארציים – kdata.D הוא תמיד הגרסה העדכנית
 FUEL, KM_PER_L, ROAD, CAR_KMH, WALK_KMH, PARK_MIN = 7.77, 13, 1.3, 28, 4.5, 3
 MAX_POOL = 25
+STAY_MIN = 35           # פחות מזה – לא שווה לעזוב את הסופר הקבוע
 SPLIT_MIN = 40          # מציעים לפצל בין שני סופרים רק אם חוסכים יותר מ-₪40
 BUS_KMH, BUS_WAIT = 15, 10  # כמה סניפים קרובים לכל היותר נבדקים בכל חישוב
 WEEKLY = [["חלב 3% בקרטון 2 ליטר", 2], ["גבינת קוטג 5% 250 גרם", 2], ["לחם אחיד פרוס 900 גר פיקוח אנג`ל", 2],
@@ -200,7 +201,7 @@ def download_media(media_id):
     return data, meta.get("mime_type", "image/jpeg")
 
 # ---------- Claude (לא חובה) ----------
-def claude_json(prompt, image=None, mime="image/jpeg"):
+def claude_json(prompt, image=None, mime="image/jpeg", keep_dict=False):
     if not CLAUDE_KEY:
         return None
     content = [{"type": "text", "text": prompt}]
@@ -221,26 +222,59 @@ def claude_json(prompt, image=None, mime="image/jpeg"):
         out = json.loads(m.group(0)) if m else None
     except Exception:
         out = None
-    if isinstance(out, dict):  # לפעמים חוזר {"items": [...]}
+    if isinstance(out, dict) and not keep_dict:  # לפעמים חוזר {"items": [...]}
         out = next((v for v in out.values() if isinstance(v, list)), out)
     if out is None: print("Claude: no JSON in reply:", txt[:300], flush=True)
     return out
 
-RECEIPT_PROMPT = ('Extract the purchased products from this Israeli supermarket receipt or shopping list. Skip store name, dates, totals (סה"כ), '
-                  'discounts (הנחה), deposits (פיקדון), bags (שקית), payment, change and VAT lines, and prices. Reply with only a JSON array like '
-                  '[{"name":"חלב 3% 1 ליטר","qty":2}] — "name" in Hebrew as written, "qty" = number of units (from ×2 / x2 / 2 יח), '
-                  'or kilograms for weighed produce if shown; default 1.')
+RECEIPT_PROMPT = ('Extract the purchased products from this Israeli supermarket receipt or shopping list. Skip dates, totals (סה"כ), '
+                  'discounts (הנחה), deposits (פיקדון), bags (שקית), payment, change and VAT lines, and prices. Reply with only a JSON object like '
+                  '{"store":"רמי לוי – סניף מודיעין, עמק איילון 30 מודיעין","items":[{"name":"חלב 3% 1 ליטר","qty":2}]} — "store" = the chain, '
+                  'branch name and address/city printed on the receipt (empty string if this is a list, not a receipt); "name" in Hebrew as written, '
+                  '"qty" = number of units (from ×2 / x2 / 2 יח), or kilograms for weighed produce if shown; default 1.')
 
-def extract_items(image=None, mime="image/jpeg", text=None):
-    items = claude_json(RECEIPT_PROMPT + ("\n\n" + text if text else ""), image, mime)
-    if not isinstance(items, list): return None
+def extract_items(image=None, mime="image/jpeg", text=None, with_store=False):
+    res = claude_json(RECEIPT_PROMPT + ("\n\n" + text if text else ""), image, mime, keep_dict=True)
+    store = ""
+    if isinstance(res, dict):
+        store = str(res.get("store") or "").strip()
+        items = res.get("items") or next((v for v in res.values() if isinstance(v, list)), None)
+    else: items = res
+    if not isinstance(items, list): return (None, store) if with_store else None
     out = []
     for x in items:
         if not isinstance(x, dict) or not str(x.get("name", "")).strip(): continue
         try: q = float(x.get("qty") or 1)
         except Exception: q = 1
         out.append({"name": str(x["name"]).strip(), "qty": q if 0 < q < 100 else 1})
-    return out
+    return (out, store) if with_store else out
+
+
+# ---------- הסופר הקבוע ----------
+def match_store(text, home):
+    """מזהה את הסניף מתוך הכיתוב בקבלה (רשת + סניף/כתובת), מבין הסניפים באזור"""
+    D = kdata.D
+    if not text or not home: return None
+    q = {kdata.stem(w) for w in kdata.toks(text)}
+    best = None
+    for s in D.stores:
+        d = km(home, s["p"])
+        if d > 60: continue
+        ch = {kdata.stem(w) for w in kdata.toks(s["chain"])}
+        if not ch or not ch <= q: continue                   # הרשת חייבת להופיע בקבלה
+        nm = {kdata.stem(w) for w in kdata.toks(s["n"])} - ch
+        rest = nm | {kdata.stem(w) for w in kdata.toks(s["a"])} - ch
+        sc = len(rest & q) - 0.5 * len(nm - q)                 # מילה בשם הסניף שלא מופיעה בקבלה (למשל BE) – פחות סביר
+        key = (sc, -d)
+        if best is None or key > best[0]: best = (key, s)
+    return best[1]["key"] if best else None
+
+def usual_store(u):
+    """הסניף שהמשתמש קונה בו הכי הרבה (לפי הקבלות)"""
+    c = u.get("stores") or {}
+    keys = {s["key"] for s in kdata.D.stores}
+    c = {k: v for k, v in c.items() if k in keys}
+    return max(c, key=c.get) if c else None
 
 # ---------- התאמת מוצרים ----------
 def item_of(d, i, qty, src=None):
@@ -358,6 +392,10 @@ def compute(u):
         if k > 0 and mins(d1) > pr["maxMin"] and len(rows) >= 1: break
         rows.append({"s": s, "d": 2 * d1, "min": mins(d1), "P": D.store_prices(s, clubs), "club": s["chain"] in clubs and s.get("cblob", -1) >= 0})
         if len(rows) >= MAX_POOL: break
+    uk = usual_store(u)
+    if uk and not any(r["s"]["key"] == uk for r in rows):      # הסופר הקבוע תמיד בהשוואה, גם אם מחוץ לטווח
+        s0 = next(s for s in D.stores if s["key"] == uk); d1 = km(home, s0["p"])
+        rows.append({"s": s0, "d": 2 * d1, "min": mins(d1), "P": D.store_prices(s0, clubs), "club": s0["chain"] in clubs and s0.get("cblob", -1) >= 0})
     # חציון מקומי למוצרים שחסרים בסניף מסוים
     med = {}
     for it in items:
@@ -371,7 +409,9 @@ def compute(u):
             tot += p * it["qty"]
         r.update(sum=tot, fuel=cost(r["d"]), tot=tot + cost(r["d"]), miss=miss)
     nearest = rows[0]
-    pool = [r for r in rows if r["min"] <= pr["maxMin"]] or [nearest]
+    reg = next((r for r in rows if r["s"]["key"] == uk), None)
+    if reg and reg["miss"] > 0.3 * len(items): reg = None     # כנראה זיהוי סניף שגוי (או חנות שלא מוכרת את רוב הסל)
+    pool = [r for r in rows if r["min"] <= pr["maxMin"] or r is reg] or [nearest]
     # סניף שחסרים בו הרבה מהמוצרים לא באמת עונה על הסל
     inrange = sorted(pool, key=lambda r: r["tot"])
     full = [r for r in pool if r["miss"] <= max(1, 0.2 * len(items))]
@@ -395,6 +435,12 @@ def compute(u):
                 d = km(home, A["s"]["p"]) + km(A["s"]["p"], B["s"]["p"]) + km(B["s"]["p"], home)
                 t = tot + cost(d)
                 if not split or t < split["tot"]: split = {"A": A, "B": B, "tot": t, "inA": inA, "inB": inB}
+    stay = reg is not None and reg["tot"] - best["tot"] < STAY_MIN
+    gap = reg["tot"] - best["tot"] if reg else 0
+    if stay:                                   # לא שווה לעזוב את הסופר הקבוע
+        alt = best; best = reg
+        if reg in ranked: ranked.remove(reg)
+        ranked.insert(0, reg)
     s = best["s"]
     how = "נסיעה" if car else ("בתחבורה ציבורית" if bus else "הליכה")
     others = [r for r in ranked if r["s"]["key"] != s["key"]]
@@ -403,10 +449,18 @@ def compute(u):
     far_km = km(home, nearest["s"]["p"])
     if far_km > 25:
         L.append(f"⚠️ _עדיין אין לי סניפים באזור שלך (הקרוב ביותר: {far_km:.0f} ק\"מ)._\n")
-    L.append(f"🏆 הסופר המנצח: *{s['n']}*")
-    L.append(f"💰 מחיר הסל: *₪{best['tot']:.0f}*" + (" (במחירי מועדון)" if best.get("club") else ""))
-    if avg and avg - best["tot"] >= 1:
-        L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}*" + (" (כולל עלות הנסיעה)" if car else ""))
+    inc = " (כולל עלות הנסיעה)" if car else ""
+    if stay:
+        L.append(f"👍 הסופר הקבוע שלך משתלם: *{s['n']}*")
+        L.append(f"💰 מחיר הסל: *₪{best['tot']:.0f}*" + (" (במחירי מועדון)" if best.get("club") else ""))
+        L.append(f"✅ זה הכי זול באזור 🏆" if gap < 1 else f"✅ במקום אחר היית חוסך רק ₪{gap:.0f}{inc} – לא שווה את הטרחה")
+    else:
+        L.append(f"🏆 הסופר המנצח: *{s['n']}*")
+        L.append(f"💰 מחיר הסל: *₪{best['tot']:.0f}*" + (" (במחירי מועדון)" if best.get("club") else ""))
+        if reg:
+            L.append(f"✅ חוסך *₪{gap:.0f}* לעומת {reg['s']['n']}{inc}")
+        elif avg and avg - best["tot"] >= 1:
+            L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}*{inc}")
     L.append(f"📍 {best['d'] / 2:.1f} ק\"מ ממך · {round(best['min'])} דק' {how}")
     split_txt = None
     if split and best["tot"] - split["tot"] > split_min:
@@ -427,9 +481,9 @@ def compute(u):
             "details": f"📋 *הסל שלך ב{s['n']}:*\n" + "\n".join(det) + fresh,
             "others": (f"💡 אם מתחלקים בין *{split['A']['s']['n']}* ל*{split['B']['s']['n']}* חוסכים עוד *₪{best['tot'] - split['tot']:.0f}*\n\n" if split_txt else "")
                       + "🏪 *כל הסופרים בטווח:*\n\n" + "\n\n".join(
-                f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} *{full_name(r['s'])}*\n"
+                f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} *{full_name(r['s'])}*" + (" ⭐ _הקבוע שלך_" if r is reg else "") + "\n"
                 f"      📍 {r['s']['a']}\n      💰 ₪{r['tot']:.0f} · {round(r['min'])} דק'" + (f" _· חסרים {r['miss']}_" if r["miss"] else "")
-                for r in inrange[:10]) + fresh,
+                for r in (inrange[:10] + ([reg] if reg and reg not in inrange[:10] else []))) + fresh,
             "split": split_txt}
 
 # ---------- שיחה ----------
@@ -796,12 +850,15 @@ def handle(msg):
         print("image bytes", len(img), mime, flush=True)
         if mime == "unsupported":
             return send_text(to, "את סוג הקובץ הזה אני לא יודע לקרוא 🙁 שלחו את הקבלה כ*תמונה* רגילה (לא כקובץ).")
-        items = extract_items(img, mime)
+        items, store_txt = extract_items(img, mime, with_store=True)
         if not items:
             return send_text(to, "לא הצלחתי לקרוא את הקבלה. נסה תמונה חדה יותר, או כתוב רשימה.")
         if not pr.get("home"): u["step"] = "loc"
         u["last_receipt"] = int(time.time()); u["remind_at"] = next_reminder(u["last_receipt"]); u["remind_miss"] = 0
         u["receipts"] = (u.get("receipts", []) + [u["last_receipt"]])[-50:]
+        sk = match_store(store_txt, pr.get("home"))
+        print("receipt store:", store_txt, "->", sk, flush=True)
+        if sk: st = u.setdefault("stores", {}); st[sk] = st.get(sk, 0) + 1
         return got_items(to, u, items)
     if text:
         if not all(k in pr for k in PROFILE_KEYS):
