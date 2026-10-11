@@ -810,6 +810,7 @@ SELFTEST_LISTS = [("""חלב 3% – 4 קרטונים
    "מגבות נייר": 1, "משחת שיניים": 2})]
 SELFTEST_CITIES = {"נתיבות": [31.4215, 34.5925], "תל אביב": [32.0809, 34.7806], "ירושלים": [31.7857, 35.2007],
                    "חיפה": [32.7940, 34.9896], "באר שבע": [31.2518, 34.7913], "פתח תקווה": [32.0871, 34.8875]}
+SELFTEST_BASIC = ("חלב", "לחם", "ביצים", "עגבני", "מלפפו", "בצל", "תפוח", "גזר", "סוכר", "אורז", "פסטה", "שמן", "קמח", "בננ")
 _selftest = {"day": ""}
 
 def selftest():
@@ -835,6 +836,10 @@ def selftest():
                 r = compute(fu)
                 if not isinstance(r, dict): probs.append(f"{tag}: החישוב נכשל ב{city}"); continue
                 res[city] = (r["store"], sum(v[0] for v in r["ip"].values()))
+                for it in found:                       # מוצר בסיסי שיוצא "חסר" בסופר המומלץ = כנראה התאמה לא נכונה
+                    v = r["ip"].get(it.get("code", ""))
+                    if v and v[1] and any(norm(it.get("src", "")).startswith(b) for b in SELFTEST_BASIC):
+                        probs.append(f"{tag}: \"{it.get('src')}\" יצא חסר ב{r['store']} ({city}) – הותאם ל\"{it['name']}\"")
                 for it in found:
                     c = r["ip"].get(it.get("code", ""), [0])[0]
                     if c > 150 and not re.match(r"^[PMEW]", it.get("code", "")):
