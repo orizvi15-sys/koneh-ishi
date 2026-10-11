@@ -303,9 +303,9 @@ def learned(u):
         for it in b["items"]:
             i = resolve(d, it)
             if i is not None:
-                c = cnt.setdefault(i, [0, 0]); c[0] += 1; c[1] += it["qty"]
+                c = cnt.setdefault(i, [0, 0, None]); c[0] += 1; c[1] += it["qty"]; c[2] = it.get("src") or c[2]
     mn = 1 if len(h) == 1 else max(2, math.ceil(len(h) * 0.4))
-    L = [dict(item_of(d, i, round(v[1] / v[0] * 2) / 2 or 1), freq=v[0]) for i, v in cnt.items() if v[0] >= mn]
+    L = [dict(item_of(d, i, round(v[1] / v[0] * 2) / 2 or 1, v[2]), freq=v[0]) for i, v in cnt.items() if v[0] >= mn]
     return sorted(L, key=lambda x: -x["freq"])
 
 # ---------- חישוב ----------
@@ -313,6 +313,11 @@ def km(a, b):
     r = math.radians; dla, dlo = r(b[0] - a[0]), r(b[1] - a[1])
     h = math.sin(dla / 2) ** 2 + math.cos(r(a[0])) * math.cos(r(b[0])) * math.sin(dlo / 2) ** 2
     return 2 * 6371 * math.asin(math.sqrt(h)) * ROAD
+
+def gp(P, it):
+    """המחיר הזול ביותר בסניף מבין המוצרים השקולים"""
+    v = [P[g] for g in it["g"] if g in P]
+    return min(v) if v else None
 
 def compute(u):
     D = kdata.D
@@ -324,7 +329,9 @@ def compute(u):
     for it in u["items"]:
         i = resolve(D, it)
         if i is None: gone.append(it["name"])
-        else: items.append(dict(it, i=i))
+        else:
+            g = [i] if pr.get("brand") == "mine" else D.group(i, it.get("src") or it["name"])
+            items.append(dict(it, i=i, g=g))
     if not items:
         return ["לא מצאתי אף אחד מהמוצרים במאגר המחירים העדכני 🙁 נסה לכתוב אותם שוב."]
     near = sorted(((km(home, s["p"]), s) for s in D.stores), key=lambda x: x[0])
@@ -337,12 +344,12 @@ def compute(u):
     # חציון מקומי למוצרים שחסרים בסניף מסוים
     med = {}
     for it in items:
-        v = sorted(r["P"][it["i"]] for r in rows if it["i"] in r["P"])
+        v = sorted(x for x in (gp(r["P"], it) for r in rows) if x is not None)
         med[it["i"]] = v[len(v) // 2] if v else D.items[it["i"]][3] / 100
     for r in rows:
         tot = 0; miss = 0
         for it in items:
-            p = r["P"].get(it["i"])
+            p = gp(r["P"], it)
             if p is None: miss += 1; p = med[it["i"]]
             tot += p * it["qty"]
         r.update(sum=tot, fuel=cost(r["d"]), tot=tot + cost(r["d"]), miss=miss)
@@ -363,7 +370,7 @@ def compute(u):
             for b in range(a + 1, len(pool)):
                 A, B = pool[a], pool[b]; tot = 0; inA, inB = [], []; ok = True
                 for it in items:
-                    pa, pb = A["P"].get(it["i"]), B["P"].get(it["i"])
+                    pa, pb = gp(A["P"], it), gp(B["P"], it)
                     if pa is None and pb is None: ok = False; break
                     if pb is None or (pa is not None and pa <= pb): tot += pa * it["qty"]; inA.append(it["name"])
                     else: tot += pb * it["qty"]; inB.append(it["name"])
@@ -391,8 +398,8 @@ def compute(u):
                      f"\n\n*{B['n']}* ({B['a']}):\n" + "\n".join("• " + x for x in split["inB"]))
     # פירוט מחירי הסל בסופר המנצח
     det = []
-    for it in sorted(items, key=lambda it: -(best["P"].get(it["i"]) or med[it["i"]]) * it["qty"]):
-        p = best["P"].get(it["i"])
+    for it in sorted(items, key=lambda it: -(gp(best["P"], it) or med[it["i"]]) * it["qty"]):
+        p = gp(best["P"], it)
         q = f" ×{it['qty']:g}" if it["qty"] != 1 else ""
         det.append(f"• {it['name']}{q} – " + (f"₪{p * it['qty']:.2f}" if p is not None else f"~₪{med[it['i']] * it['qty']:.2f} _(חסר בסניף)_"))
     if gone: det.append("\n_לא נמצאו במאגר: " + ", ".join(gone) + "_")
@@ -443,7 +450,7 @@ def finish(to, u):
     else:
         u["last"] = {k: res[k] for k in ("details", "others", "split")}
         send_buttons(to, res["main"], [("oth", "🏪 הצג סופרים אחרים")])
-    u["hist"] = (u["hist"] + [{"d": int(time.time()), "items": [{"code": x.get("code", ""), "name": x["name"], "qty": x["qty"]} for x in u["items"]]}])[-12:]
+    u["hist"] = (u["hist"] + [{"d": int(time.time()), "items": [{"code": x.get("code", ""), "name": x["name"], "src": x.get("src", ""), "qty": x["qty"]} for x in u["items"]]}])[-12:]
     u["step"] = "done"; save_users()
     if len(u["hist"]) == 1:
         send_text(to, "_שמרתי את הקנייה כדי ללמוד את ההרגלים שלך. מתי שרוצים – פשוט כותבים *היי* 🙂_")

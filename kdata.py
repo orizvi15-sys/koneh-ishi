@@ -18,6 +18,19 @@ def toks(s):
     return [w for w in s.split() if len(w) > 1 or w.isdigit()]
 
 
+SIZE_RX = re.compile(r'(\d+(?:\.\d+)?)\s*(ק"?ג|קילו|גרם|גר|ג\'?|מ"?ל|ליטר|ל\'?)(?![א-ת])')
+
+
+def parse_size(name):
+    if re.search(r"\d\s*[\*xX×]\s*\d", name): return None   # מארזים (6*1.5) – לא משווים
+    m = SIZE_RX.search(name)
+    if not m: return None
+    v, u = float(m.group(1)), m.group(2)
+    if u.startswith("ק"): v *= 1000
+    elif u.startswith("ל"): v *= 1000
+    return v if v > 0 else None
+
+
 def stem(w):
     """גזירה גסה של רבים/נקבה בעברית: עגבניות→עגבני, ביצים→ביצ"""
     if len(w) > 3 and not w.isdigit():
@@ -38,6 +51,7 @@ class Data:
         self.name2i = {}
         for i, it in enumerate(items): self.name2i.setdefault(it[1], i)
         self.max_avail = max((it[2] for it in items), default=1) or 1
+        self._size, self._groups = {}, {}
         self._cache = OrderedDict(); self._lock = threading.Lock()
         # אינדקס חיפוש
         self.itoks = [set(toks(it[1])) for it in items]
@@ -59,6 +73,37 @@ class Data:
 
     def price(self, store, i):
         return self.prices(store["blob"]).get(i)
+
+    def size(self, i):
+        """גודל האריזה מתוך השם (בגרם/מ"ל), או None"""
+        c = self._size.get(i, -1)
+        if c != -1: return c
+        c = parse_size(self.items[i][1]); self._size[i] = c; return c
+
+    def group(self, i, query=None, n=30):
+        """מוצרים שקולים: אותו סוג ואותו גודל (±12%), לפי מילות החיפוש. משמש להשוואת 'הכי זול מאותו סוג'."""
+        code = self.items[i][0]
+        if not code[:1].isdigit(): return [i]          # ירקות/ביצים – כבר מאוחדים
+        q = [stem(w) for w in toks(query or self.items[i][1])]
+        if not q: return [i]
+        key = (i, tuple(q))
+        if key in self._groups: return self._groups[key]
+        s0 = self.size(i)
+        out = [i]
+        for j in self.search(query or self.items[i][1], 80):
+            if j == i or not self.items[j][0][:1].isdigit(): continue
+            t = [stem(w) for w in toks(self.items[j][1])]
+            ts = set(t)
+            if not all(w in ts or any(x.startswith(w) for x in ts) for w in q): continue   # כל מילות החיפוש (כולל מותג אם נכתב)
+            if not t or t[0] != q[0] and stem(toks(self.items[i][1])[0]) != t[0]: continue  # אותו סוג מוצר (המילה הראשונה)
+            s1 = self.size(j)
+            if s0 is None or s1 is None:
+                if s0 != s1: continue
+            elif abs(s1 - s0) > 0.12 * s0: continue
+            out.append(j)
+            if len(out) >= n: break
+        self._groups[key] = out
+        return out
 
     def search(self, name, n=6):
         q = toks(name)
