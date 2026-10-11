@@ -45,6 +45,21 @@ def stem(w):
 FINALS = str.maketrans("ךםןףץ", "כמנפצ")
 
 
+def edit1(a, b):
+    """האם המילים שונות בשינוי אחד לכל היותר (החלפה/הוספה/מחיקה/החלפת שתי אותיות סמוכות)"""
+    if a == b: return True
+    la, lb = len(a), len(b)
+    if abs(la - lb) > 1: return False
+    if la == lb:
+        d = [i for i in range(la) if a[i] != b[i]]
+        if len(d) == 1: return True
+        return len(d) == 2 and d[1] == d[0] + 1 and a[d[0]] == b[d[1]] and a[d[1]] == b[d[0]]
+    if la > lb: a, b = b, a
+    i = 0
+    while i < len(a) and a[i] == b[i]: i += 1
+    return a[i:] == b[i + 1:]
+
+
 class Prices(dict):
     """מילון מחירים של סניף + מבצעי כמות"""
     def __init__(self, *a):
@@ -75,6 +90,9 @@ class Data:
         for t in self.vocab:
             for k in range(2, len(t)): pre[t[:k]].append(t)
         self.pre = dict(pre); self.vset = set(self.vocab)
+        self._bylen = defaultdict(list); self._fix = {}
+        for t in self.vocab:
+            if len(t) >= 3: self._bylen[len(t)].append(t)
         self._meta = {}
 
     def meta(self, i):
@@ -156,8 +174,23 @@ class Data:
         self._groups[key] = out
         return out
 
+    def fix_word(self, w):
+        """תיקון שגיאת כתיב קלה במילה שלא קיימת במאגר ("במבע"→"במבה", "חלן"→"חלב"): המילה הכי נפוצה שרחוקה באות אחת"""
+        if w.isdigit() or len(w) < 3 or w in self.inv or stem(w) in self.sinv: return w
+        c = self._fix.get(w)
+        if c is not None: return c
+        for t in (w.replace("ן", "ו"), w[:-1] + "ו" if w.endswith("ן") else w, w.replace("ו", "ן")[:-1] + w[-1]):
+            if t != w and t in self.inv: self._fix[w] = t; return t   # ו/ן צמודות במקלדת – הטעות הנפוצה ביותר
+        best = (0, w)
+        for t in self._bylen.get(len(w), []) + self._bylen.get(len(w) - 1, []) + self._bylen.get(len(w) + 1, []):
+            if edit1(w, t):
+                f = len(self.inv[t])
+                if f > best[0]: best = (f, t)
+        self._fix[w] = best[1]
+        return best[1]
+
     def search(self, name, n=6):
-        q = toks(name)
+        q = [self.fix_word(w) for w in toks(name)]
         if not q: return []
         score = defaultdict(float)
         qs = [stem(w) for w in q]; q0 = qs[0]

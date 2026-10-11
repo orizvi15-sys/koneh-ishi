@@ -858,7 +858,7 @@ intent is one of:
  "remove" – remove products from the current basket ("תוריד את הקולה", "בלי ביצים").
  "price"  – asks the price of ONE product or where it is cheapest ("כמה עולה קוטג'?", "איפה הכי זול חלב").
  "chat"   – anything else: thanks, greetings, choosing a store ("נלך על רמי לוי"), questions about the bot.
-items: product names in Hebrew as the user wrote them, WITHOUT quantity words; qty = units, but for meat/chicken/fish/produce
+items: product names in Hebrew, with obvious typos corrected ("במבע"→"במבה", "חלן"→"חלב", "קוטג"→"קוטג'"), WITHOUT quantity words; qty = units, but for meat/chicken/fish/produce
 sold by weight qty is kilograms ("קילו"=1, "חצי קילו"=0.5, "300 גרם"=0.3, "2 קילו"=2). Empty list for chat.
 reply: only for chat – a short warm Hebrew reply (max 2 short sentences), e.g. wish good shopping if they chose a store,
 or explain they can send a list, a receipt photo or ask "כמה עולה X". Never invent prices."""
@@ -1020,12 +1020,27 @@ def got_items(to, u, items):
         return
     finish(to, u)
 
+COMMANDS = ["אבחון מחדש", "אבחון", "איפוס", "איפוס מלא", "מחק אותי", "הגדרות", "כמה חסכתי", "סיכום חיסכון", "סטטיסטיקה"]
+
+def fix_command(text):
+    """פקודה עם שגיאת כתיב קלה (אות אחת, או אות סמוכה במקלדת כמו ו/ן) – מזהים אותה בכל זאת"""
+    t = re.sub(r"[^\w\s]", "", text).strip()
+    if not t or len(t) > 20 or t in COMMANDS: return text
+    norm = lambda x: x.translate(kdata.FINALS)
+    tn = norm(t)
+    for c in COMMANDS:
+        cn = norm(c)
+        if len(cn) >= 4 and kdata.edit1(tn, cn): return c
+        if len(cn) >= 8 and len(tn) == len(cn) and sum(a != b for a, b in zip(tn, cn)) <= 2: return c
+    return text
+
 def handle(msg):
     to = msg["from"]; u = user(to); t = msg.get("type"); pr = u["prefs"]
     reply = None
     if t == "interactive":
         it = msg["interactive"]; reply = (it.get("button_reply") or it.get("list_reply") or {}).get("id")
     text = msg.get("text", {}).get("body", "").strip() if t == "text" else ""
+    if text: text = fix_command(text)                     # "איפןס מלא" → "איפוס מלא"
     print("handle", t, "step", u["step"])
     if msg.get("name"): u["name"] = msg["name"]
     u["remind_miss"] = 0
