@@ -452,20 +452,19 @@ def compute(u):
         v = sorted(x for x in (gp(r["P"], it) for r in rows) if x is not None)
         med[it["i"]] = v[len(v) // 2] if v else D.items[it["i"]][3] / 100
     for r in rows:
-        tot = 0; miss = 0
+        tot = 0; miss = 0; mlist = []
         for it in items:
             p = gp(r["P"], it)
-            if p is None: miss += 1; p = med[it["i"]]
+            if p is None: miss += 1; p = med[it["i"]]; mlist.append(it["name"].replace(' (לק"ג)', ""))
             tot += p * it["qty"]
-        r.update(sum=tot, fuel=cost(r["d"]), tot=tot + cost(r["d"]), miss=miss)
+        r.update(mlist=mlist, sum=tot, fuel=cost(r["d"]), tot=tot + cost(r["d"]), miss=miss)
     nearest = rows[0]
     reg = next((r for r in rows if r["s"]["key"] == uk), None)
     if reg and reg["miss"] > 0.3 * len(items): reg = None     # כנראה זיהוי סניף שגוי (או חנות שלא מוכרת את רוב הסל)
     pool = [r for r in rows if r["min"] <= pr["maxMin"] or r is reg] or [nearest]
     # סניף שחסרים בו הרבה מהמוצרים לא באמת עונה על הסל
-    full = [r for r in pool if r["miss"] <= max(1, 0.2 * len(items))]
-    inrange = sorted(full or pool, key=lambda r: r["tot"])          # ברשימה – רק סניפים שיש בהם את רוב הסל
-    hidden = len(pool) - len(full) if full else 0
+    full = [r for r in pool if r["miss"] <= 0.3 * len(items)]       # סניף שחסרים בו יותר מ-30% מהסל – לא נחשב ולא מוצג
+    inrange = sorted(full or pool, key=lambda r: r["tot"])
     if full: pool = full
     ranked = sorted(pool, key=lambda r: r["tot"]); best = ranked[0]
     # לא שולחים רחוק בשביל חיסכון זניח: אם סניף קרוב יותר כמעט באותו מחיר – ממליצים עליו
@@ -541,9 +540,8 @@ def compute(u):
                 f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} *{full_name(r['s'])}*" + (" ⭐ _הקבוע שלך_" if r is reg else "") + "\n"
                 + ("      ✡️ סניף כשר\n" if is_kosher(r["s"]) else "") +
                 f"      📍 {r['s']['a']}\n      💰 {'~' if r['miss'] else ''}₪{r['tot']:.0f} · {ride} {round(r['min'])} דק'"
-                + (f"\n      _⚠️ חסר{'ים' if r['miss'] > 1 else ''} {r['miss']} – המחיר משוער_" if r["miss"] else "")
-                for r in (inrange[:10] + ([reg] if reg and reg not in inrange[:10] else [])))
-                      + (f"\n\n_לא הצגתי {hidden} סניפים שחסרים בהם רוב המוצרים_" if hidden else "") + fresh,
+                + (f"\n      ❌ _חסר בסניף: {', '.join(r['mlist'][:6])}_" if r["miss"] else "")
+                for r in (inrange[:10] + ([reg] if reg and reg not in inrange[:10] and reg in full else []))) + fresh,
             "split": split_txt}
 
 # ---------- שיחה ----------
