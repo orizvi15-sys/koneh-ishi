@@ -324,6 +324,12 @@ def km(a, b):
     h = math.sin(dla / 2) ** 2 + math.cos(r(a[0])) * math.cos(r(b[0])) * math.sin(dlo / 2) ** 2
     return 2 * 6371 * math.asin(math.sqrt(h)) * ROAD
 
+def full_name(st):
+    """"רמי לוי – סניף עזריאלי חיפה" """
+    ch, n = st["chain"], st["n"]
+    br = n[len(ch):].strip(" -–") if n.startswith(ch) else n
+    return f"{ch} – סניף {br}" if br else ch
+
 def gp(P, it):
     """המחיר הזול ביותר בסניף מבין המוצרים השקולים"""
     v = [P[g] for g in it["g"] if g in P]
@@ -420,9 +426,10 @@ def compute(u):
             "nav": f"https://waze.com/ul?ll={s['p'][0]},{s['p'][1]}&navigate=yes",
             "details": f"📋 *הסל שלך ב{s['n']}:*\n" + "\n".join(det) + fresh,
             "others": (f"💡 אם מתחלקים בין *{split['A']['s']['n']}* ל*{split['B']['s']['n']}* חוסכים עוד *₪{best['tot'] - split['tot']:.0f}*\n\n" if split_txt else "")
-                      + "🏪 *כל הסופרים בטווח:*\n" + "\n".join(
-                f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} {r['s']['n']} – ₪{r['tot']:.0f} ({round(r['min'])} דק')"
-                + (f" _· חסרים {r['miss']}_" if r["miss"] else "") for r in inrange[:10]) + fresh,
+                      + "🏪 *כל הסופרים בטווח:*\n\n" + "\n\n".join(
+                f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} *{full_name(r['s'])}*\n"
+                f"      📍 {r['s']['a']}\n      💰 ₪{r['tot']:.0f} · {round(r['min'])} דק'" + (f" _· חסרים {r['miss']}_" if r["miss"] else "")
+                for r in inrange[:10]) + fresh,
             "split": split_txt}
 
 # ---------- שיחה ----------
