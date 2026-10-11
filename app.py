@@ -232,23 +232,51 @@ RECEIPT_PROMPT = ('Extract the purchased products from this Israeli supermarket 
                   'discounts (הנחה), deposits (פיקדון), bags (שקית), payment, change and VAT lines, and prices. Reply with only a JSON object like '
                   '{"store":"רמי לוי – סניף מודיעין, עמק איילון 30 מודיעין","items":[{"name":"חלב 3% 1 ליטר","qty":2}]} — "store" = the chain, '
                   'branch name and address/city printed on the receipt (empty string if this is a list, not a receipt); "name" in Hebrew as written, '
-                  '"qty" = number of units (from ×2 / x2 / 2 יח), or kilograms for weighed produce if shown; default 1.')
+                  '"qty" = number of units (from ×2 / x2 / 2 יח), or kilograms for weighed produce if shown; default 1. '
+                  'Photos are often blurry, dark, crooked or crumpled: extract every product line you can read with reasonable confidence, '
+                  'skip lines you cannot read, never invent products. Also add "quality": "ok" (everything readable), "partial" (some lines '
+                  'unreadable or the receipt is cut off) or "bad" (almost nothing readable), and "issue": one of "dark", "blurry", "cut", '
+                  '"far", "glare", "not_receipt" or "" — the main problem, if any.')
 
 def extract_items(image=None, mime="image/jpeg", text=None, with_store=False):
     res = claude_json(RECEIPT_PROMPT + ("\n\n" + text if text else ""), image, mime, keep_dict=True)
-    store = ""
+    store = ""; meta = {}
     if isinstance(res, dict):
         store = str(res.get("store") or "").strip()
+        meta = {"quality": str(res.get("quality") or "ok"), "issue": str(res.get("issue") or "")}
         items = res.get("items") or next((v for v in res.values() if isinstance(v, list)), None)
     else: items = res
-    if not isinstance(items, list): return (None, store) if with_store else None
+    if not isinstance(items, list): return (None, store, meta) if with_store else None
     out = []
     for x in items:
         if not isinstance(x, dict) or not str(x.get("name", "")).strip(): continue
         try: q = float(x.get("qty") or 1)
         except Exception: q = 1
         out.append({"name": str(x["name"]).strip(), "qty": q if 0 < q < 100 else 1})
-    return (out, store) if with_store else out
+    return (out, store, meta) if with_store else out
+
+
+def enhance(img):
+    """שיפור קל לתמונת קבלה: סיבוב לפי EXIF, ניגודיות, חדות, והקטנה לגודל שהמודל קורא (אם Pillow מותקן)"""
+    try:
+        from PIL import Image, ImageOps, ImageFilter
+        import io
+        im = ImageOps.exif_transpose(Image.open(io.BytesIO(img))).convert("L")
+        if max(im.size) > 2000: im.thumbnail((2000, 2000))
+        im = ImageOps.autocontrast(im, cutoff=1).filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3))
+        out = io.BytesIO(); im.save(out, "JPEG", quality=90)
+        return out.getvalue(), "image/jpeg"
+    except Exception as e:
+        print("enhance skipped:", e, flush=True)
+        return None, None
+
+
+ISSUE_TIP = {"dark": "התמונה חשוכה 💡 נסו לצלם ליד אור.", "blurry": "התמונה מטושטשת 📷 החזיקו את הטלפון יציב ותנו לו להתמקד.",
+             "cut": "הקבלה חתוכה ✂️ ודאו שכולה בתוך התמונה (קבלה ארוכה – אפשר בכמה תמונות).",
+             "far": "הקבלה רחוקה מדי 🔍 התקרבו כך שהיא ממלאת את המסך.", "glare": "יש השתקפות על הקבלה ✨ נסו מזווית קצת אחרת, בלי פלאש.",
+             "not_receipt": "זה לא נראה כמו קבלה 🤔 שלחו צילום של קבלה מהסופר, או כתבו רשימה."}
+MERGE_SEC = 150          # תמונה נוספת תוך 2.5 דקות = המשך של אותה קבלה
+_img_locks = {}
 
 
 # ---------- הסופר הקבוע ----------
@@ -526,6 +554,7 @@ def finish(to, u, redo=False):
         u["last"] = {k: res[k] for k in ("details", "others", "split")}
         n, miss = len(u["items"]), len(u.get("missed") or [])
         main = res["main"] + f"\n🧾 זיהיתי {n} מוצרים" + (f" ({miss} לא נמצאו)" if miss else "")
+        if u.get("note"): main += "\n\n" + u.pop("note")
         send_buttons(to, main, [("seen", "🧾 מה זיהיתי"), ("oth", "🏪 סופרים אחרים")])
     entry = {"d": int(time.time()), "items": [{"code": x.get("code", ""), "name": x["name"], "src": x.get("src", ""), "qty": x["qty"]} for x in u["items"]]}
     if redo and u["hist"]: u["hist"][-1] = entry          # תיקון – מחליפים את הקנייה האחרונה במקום להוסיף
@@ -684,6 +713,42 @@ def understood_text(u, missed=()):
     if missed: L.append("\n❓ לא מצאתי: " + ", ".join(missed[:8]))
     return "\n".join(L)
 
+def got_receipt(to, u, img, mime):
+    pr = u["prefs"]
+    items, store_txt, meta = extract_items(img, mime, with_store=True)
+    if not items or meta.get("quality") == "bad":
+        e_img, e_mime = enhance(img)                       # ניסיון שני – אחרי שיפור התמונה
+        if e_img:
+            i2, s2, m2 = extract_items(e_img, e_mime, with_store=True)
+            if i2 and len(i2) > len(items or []): items, store_txt, meta = i2, s2 or store_txt, m2
+    print("receipt:", len(items or []), "items", meta, flush=True)
+    if not items:
+        tip = ISSUE_TIP.get(meta.get("issue"), "נסו לצלם שוב – על משטח ישר, באור טוב, כשהקבלה ממלאת את המסך.")
+        return send_text(to, "לא הצלחתי לקרוא את הקבלה 🙁\n" + tip + "\nאפשר גם פשוט לכתוב מה קניתם ✍️")
+    now = int(time.time())
+    # תמונה נוספת זמן קצר אחרי הקודמת – כנראה עוד חלק מאותה קבלה: מחברים לאותו סל
+    if u.get("rbuf_t", 0) > now - MERGE_SEC and u.get("items") and u.get("step") in ("done", "forgot"):
+        found, missed = match_items(items)
+        have = {(x["code"], x["qty"]) for x in u["items"]}
+        new = [x for x in found if (x["code"], x["qty"]) not in have]   # שורות שצולמו פעמיים (חפיפה בין התמונות) – פעם אחת
+        u["items"] += new; u["missed"] = ((u.get("missed") or []) + missed)[:8]; u["rbuf_t"] = now
+        u["note"] = f"➕ חיברתי את התמונה הנוספת לאותה קבלה (+{len(new)} מוצרים)"
+        if u["step"] == "forgot":                            # עדיין מחכים לתשובה על "בדרך כלל אתה קונה גם" – רק מעדכנים
+            save_users(); return send_text(to, u.pop("note"))
+        typing(to)
+        return finish(to, u, redo=True)
+    if not pr.get("home"): u["step"] = "loc"
+    u["last_receipt"] = now; u["remind_at"] = next_reminder(now); u["remind_miss"] = 0
+    u["receipts"] = (u.get("receipts", []) + [now])[-50:]
+    u["rbuf_t"] = now
+    sk = match_store(store_txt, pr.get("home"))
+    print("receipt store:", store_txt, "->", sk, flush=True)
+    if sk: st = u.setdefault("stores", {}); st[sk] = st.get(sk, 0) + 1
+    if meta.get("quality") == "partial":
+        u["note"] = "⚠️ חלק מהקבלה לא היה ברור – אפשר לשלוח עכשיו צילום של החלק החסר ואחבר אותו, או לכתוב מה חסר ✍️"
+    return got_items(to, u, items)
+
+
 def got_items(to, u, items):
     found, missed = match_items(items)
     if not found:
@@ -822,7 +887,10 @@ def handle(msg):
         send_text(to, "*הסל הקבוע שלך:*\n" + "\n".join(f"• {x['name']}" + (f" ×{x['qty']:g}" if x["qty"] != 1 else "") for x in L[:15]))
         return finish(to, u)
     if reply == "cam":
-        u["step"] = "basket"; save_users(); return send_text(to, "צלם את הקבלה (או רשימה כתובה) ושלח כאן 📷")
+        u["step"] = "basket"
+        tip = "" if u.get("cam_tip") else "\n\n💡 _שימו את הקבלה על משטח, באור טוב. קבלה ארוכה – אפשר לצלם בכמה תמונות ואחבר אותן._"
+        u["cam_tip"] = 1; save_users()
+        return send_text(to, "צלם את הקבלה (או רשימה כתובה) ושלח כאן 📷" + tip)
     if reply == "list":
         u["step"] = "basket"; save_users(); return send_text(to, "כתוב מה קונים, למשל:\n_2 חלב, לחם, קוטג', 1.5 קג עגבניות_")
     if reply == "weekly" and pr.get("hh"): reply = pr["hh"]
@@ -851,16 +919,8 @@ def handle(msg):
         print("image bytes", len(img), mime, flush=True)
         if mime == "unsupported":
             return send_text(to, "את סוג הקובץ הזה אני לא יודע לקרוא 🙁 שלחו את הקבלה כ*תמונה* רגילה (לא כקובץ).")
-        items, store_txt = extract_items(img, mime, with_store=True)
-        if not items:
-            return send_text(to, "לא הצלחתי לקרוא את הקבלה 🙁\nאם היא ארוכה – שלחו אותה כ*קובץ* (📎 ← קובץ) כדי שטלגרם לא יכווץ אותה, או צלמו בשני חלקים.")
-        if not pr.get("home"): u["step"] = "loc"
-        u["last_receipt"] = int(time.time()); u["remind_at"] = next_reminder(u["last_receipt"]); u["remind_miss"] = 0
-        u["receipts"] = (u.get("receipts", []) + [u["last_receipt"]])[-50:]
-        sk = match_store(store_txt, pr.get("home"))
-        print("receipt store:", store_txt, "->", sk, flush=True)
-        if sk: st = u.setdefault("stores", {}); st[sk] = st.get(sk, 0) + 1
-        return got_items(to, u, items)
+        with _img_locks.setdefault(to, threading.Lock()):     # כמה תמונות ביחד (אלבום) – אחת אחרי השנייה
+            return got_receipt(to, u, img, mime)
     if text:
         if not all(k in pr for k in PROFILE_KEYS):
             return send_text(to, "בוא נסיים קודם את השאלות 🙂 אפשר ללחוץ על הכפתורים למעלה.")
