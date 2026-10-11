@@ -452,12 +452,13 @@ def compute(u):
         v = sorted(x for x in (gp(r["P"], it) for r in rows) if x is not None)
         med[it["i"]] = v[len(v) // 2] if v else D.items[it["i"]][3] / 100
     for r in rows:
-        tot = 0; miss = 0; mlist = []
+        tot = 0; miss = 0; mlist = []; have = 0
         for it in items:
             p = gp(r["P"], it)
             if p is None: miss += 1; p = med[it["i"]]; mlist.append(it["name"].replace(' (לק"ג)', ""))
-            tot += p * it["qty"]
-        r.update(mlist=mlist, sum=tot, fuel=cost(r["d"]), tot=tot + cost(r["d"]), miss=miss)
+            else: have += p * it["qty"]               # מחיר מדויק – רק מה שיש בסניף (להצגה)
+            tot += p * it["qty"]                       # להשוואה בין סניפים – חסר מוערך לפי האזור
+        r.update(mlist=mlist, have=have, sum=tot, fuel=cost(r["d"]), tot=tot + cost(r["d"]), miss=miss)
     nearest = rows[0]
     reg = next((r for r in rows if r["s"]["key"] == uk), None)
     if reg and reg["miss"] > 0.3 * len(items): reg = None     # כנראה זיהוי סניף שגוי (או חנות שלא מוכרת את רוב הסל)
@@ -504,11 +505,13 @@ def compute(u):
     ride = "🚗" if car else ("🚌" if bus else "🚶")
     if stay:
         L.append(f"👍 הסופר הקבוע שלך משתלם: *{s['n']}*" + kosher_tag(s))
-        L.append(f"💰 מחיר הסל: *₪{best['tot']:.0f}*" + (" (במחירי מועדון)" if best.get("club") else ""))
+        L.append(f"💰 מחיר הסל: *₪{best['have']:.0f}*" + (" (במחירי מועדון)" if best.get("club") else "")
+                 + (f"\n❌ _חסר בסניף: {', '.join(best['mlist'][:6])}_" if best["miss"] else ""))
         L.append(f"✅ זה הכי זול באזור 🏆" if gap < 1 else f"✅ במקום אחר היית חוסך רק ₪{gap:.0f}{inc} – לא שווה את הטרחה")
     else:
         L.append(f"🏆 הסופר המנצח: *{s['n']}*" + kosher_tag(s))
-        L.append(f"💰 מחיר הסל: *₪{best['tot']:.0f}*" + (" (במחירי מועדון)" if best.get("club") else ""))
+        L.append(f"💰 מחיר הסל: *₪{best['have']:.0f}*" + (" (במחירי מועדון)" if best.get("club") else "")
+                 + (f"\n❌ _חסר בסניף: {', '.join(best['mlist'][:6])}_" if best["miss"] else ""))
         if reg:
             L.append(f"✅ חוסך *₪{gap:.0f}* לעומת {reg['s']['n']}{inc}")
         elif avg and avg - best["tot"] >= 1:
@@ -539,7 +542,7 @@ def compute(u):
                       + "🏪 *כל הסופרים בטווח:*\n\n" + "\n\n".join(
                 f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} *{full_name(r['s'])}*" + (" ⭐ _הקבוע שלך_" if r is reg else "") + "\n"
                 + ("      ✡️ סניף כשר\n" if is_kosher(r["s"]) else "") +
-                f"      📍 {r['s']['a']}\n      💰 {'~' if r['miss'] else ''}₪{r['tot']:.0f} · {ride} {round(r['min'])} דק'"
+                f"      📍 {r['s']['a']}\n      💰 ₪{r['have']:.0f} · {ride} {round(r['min'])} דק'"
                 + (f"\n      ❌ _חסר בסניף: {', '.join(r['mlist'][:6])}_" if r["miss"] else "")
                 for r in (inrange[:10] + ([reg] if reg and reg not in inrange[:10] and reg in full else []))) + fresh,
             "split": split_txt}
@@ -783,11 +786,11 @@ def understood_text(u, missed=()):
         a, b = toks(src), toks(x["name"])
         alt = f" _(כתבת: {src})_" if src and a and len(a & b) < 0.5 * len(a) else ""   # הצגה רק כשהזיהוי שונה ממה שנכתב
         pr = ip.get(x.get("code", ""))
-        price = (f" – {'~' if pr[1] else ''}₪{pr[0]:.2f}" if pr else "")
-        if pr: tot += pr[0]
+        price = ("" if not pr else " – ❌ _חסר בסניף_" if pr[1] else f" – ₪{pr[0]:.2f}")
+        if pr and not pr[1]: tot += pr[0]
         L.append(f"• {nm}{q}{price}{alt}")
     if len(u["items"]) > 45: L.append(f"…ועוד {len(u['items']) - 45}")
-    if tot: L.append(f"\n💰 *סה\"כ: ₪{tot:.2f}*" + ("\n_~ = חסר בסניף, לפי מחיר ממוצע באזור_" if any(v[1] for v in ip.values()) else ""))
+    if tot: L.append(f"\n💰 *סה\"כ: ₪{tot:.2f}*")
     if missed: L.append("\n❓ לא מצאתי: " + ", ".join(missed[:8]))
     return "\n".join(L)
 
