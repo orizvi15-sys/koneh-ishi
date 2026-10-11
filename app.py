@@ -1034,6 +1034,67 @@ def fix_command(text):
         if len(cn) >= 8 and len(tn) == len(cn) and sum(a != b for a, b in zip(tn, cn)) <= 2: return c
     return text
 
+def place_name(home):
+    """שם המקום לפי הסניפים הקרובים ("נתיבות")"""
+    D = kdata.D
+    if not D or not home: return "המיקום ששמרתי"
+    near = sorted(D.stores, key=lambda s: km(home, s["p"]))[:5]
+    cities = [(s["a"].split(",")[-1].strip()) for s in near if "," in s["a"]]
+    c = max(set(cities), key=cities.count) if cities else ""
+    return f"אזור {c}" if c else "המיקום ששמרתי"
+
+SETTINGS = [("set:loc", "📍 עדכון מיקום"), ("set:club", "💳 מועדוני לקוחות"), ("set:store", "⭐ הסופר הקבוע שלי"),
+            ("set:remind", "⏰ תזכורת שבועית"), ("set:sav", "💰 כמה חסכתי"), ("set:help", "❓ איך משתמשים"),
+            ("set:reset", "🔄 איפוס מלא")]
+
+HELP = ("❓ *איך משתמשים בקונה אישי*\n\n"
+        "🛒 *רשימה:* כותבים מה קונים – _2 חלב, לחם, קילו חזה עוף_\n"
+        "📷 *קבלה:* מצלמים קבלה מהסופר ושולחים (קבלה ארוכה – אפשר בכמה תמונות)\n"
+        "💬 *שאלה:* _כמה עולה קוטג'?_ – ואראה איפה הכי זול לידך\n"
+        "➕ *שינוי:* _תוסיף במבה_ / _תוריד את הקולה_\n"
+        "🎤 *הקלטה:* אפשר גם לדבר (אם מופעל)\n\n"
+        "אחרי ההשוואה: *🧾 מה זיהיתי* – כל המוצרים והמחירים, *🏪 סופרים אחרים* – השוואה מלאה.")
+
+def settings_menu(to, u):
+    u["step"] = "done"; save_users()
+    return send_buttons(to, "⚙️ *מה תרצה לעשות?*", SETTINGS)
+
+def settings_action(to, u, reply):
+    pr = u["prefs"]
+    if reply == "set:club":                     # מציגים את המועדונים הנוכחיים (✅) – לוחצים כדי להוסיף/להוריד
+        u["step"] = "clubpick"; u["club_ctx"] = "later"; save_users()
+        return send_buttons(to, f"💳 *מועדוני לקוחות* – לוחצים כדי לסמן/להוריד (עד {MAX_CLUBS})",
+                            club_buttons(u) + [("club:none", "🚫 בלי מועדון")])
+    if reply == "set:store":
+        D = kdata.D; uk = usual_store(u); cur = next((s for s in D.stores if s["key"] == uk), None)
+        near = sorted((s for s in D.stores if s["chain"] not in ("יילו",) and not re.search(r"\bBE\b|Be\b", s["n"])),
+                      key=lambda s: km(pr["home"], s["p"]))[:6] if pr.get("home") else []
+        btns = [(f"st:{s['key']}", s["n"][:30]) for s in near if not uk or s["key"] != uk] + [("st:none", "🚫 אין לי סופר קבוע")]
+        return send_buttons(to, (f"⭐ הסופר הקבוע שלך: *{cur['n']}*\n\nלשנות?" if cur else "⭐ עוד אין לי סופר קבוע שלך (אני לומד אותו מהקבלות).\n\nאפשר לבחור:"), btns)
+    if reply.startswith("st:"):
+        k = reply[3:]
+        if k == "none": u.pop("stores", None); save_users(); return send_text(to, "בסדר, השוואה תהיה מול ממוצע הסופרים באזור 👍")
+        u["stores"] = {k: 1000}; save_users()
+        s = next((s for s in kdata.D.stores if s["key"] == k), None)
+        return send_text(to, f"⭐ רשמתי: *{s['n'] if s else 'הסופר'}* הוא הסופר הקבוע שלך 👍")
+    if reply == "set:remind":
+        if pr.get("remind_off"):
+            pr.pop("remind_off", None); save_users()
+            return send_text(to, "⏰ התזכורת השבועית *הופעלה* – אזכיר לך שבוע אחרי הקנייה 👍")
+        pr["remind_off"] = True; u.pop("remind_at", None); save_users()
+        return send_text(to, "⏰ התזכורת השבועית *כובתה* 👍")
+    if reply == "set:sav":
+        return send_text(to, savings_text(u) or "עוד לא בדקת קניות החודש 🙂")
+    if reply == "set:help":
+        return send_text(to, HELP)
+    if reply == "set:reset":
+        return send_buttons(to, "🔄 *איפוס מלא* ימחק את כל מה שלמדתי עליך (מיקום, מועדונים, קניות קודמות).\nבטוח?",
+                            [("reset_yes", "כן, לאפס"), ("reset_no", "לא, ביטול")])
+    if reply == "reset_no":
+        return send_text(to, "בוטל 👍")
+    if reply == "reset_yes":
+        return handle({"from": to, "type": "text", "text": {"body": "איפוס מלא"}})
+
 def handle(msg):
     to = msg["from"]; u = user(to); t = msg.get("type"); pr = u["prefs"]
     reply = None
@@ -1070,12 +1131,22 @@ def handle(msg):
         reply, text = "cam", ""
     elif text == M_SET:
         text = "הגדרות"
-    if text == M_NEW or (GREET.match(text) and len(text) <= 25):
-        if all(k in pr for k in PROFILE_KEYS):
-            send_text(to, f"היי{' ' + u['name'] if u.get('name') else ''}! 👋", menu=True)
-            return ask(to, "basket", u)
+    if text == M_NEW or (GREET.match(text) and len(text) <= 25) or (text == "/start" and all(k in pr for k in PROFILE_KEYS)):
+        if all(k in pr for k in PROFILE_KEYS):         # משתמש חוזר – רק מוודאים שהמיקום עדיין נכון
+            u["step"] = "loccheck"; save_users()
+            return send_buttons(to, f"היי{' ' + u['name'] if u.get('name') else ''}! 👋\n📍 יוצאים לקניות מ{place_name(pr['home'])}?",
+                                [("loc_ok", "✅ כן"), ("loc_new", "📍 ממקום אחר")])
         return ask(to, "loc", u, intro=welcome(u) + "\n\n")
-    if text in ("הגדרות", "התחל", "מחדש", "/start", "/settings") or u["step"] == "new":
+    if text in ("הגדרות", "/settings"):
+        return settings_menu(to, u)
+    if reply == "loc_ok":
+        return ask(to, "basket", u, intro="מעולה, סיימנו 🎉\n\n")
+    if reply in ("loc_new", "set:loc"):
+        u["step"] = "loccheck" if reply == "loc_new" else "setloc"; save_users()
+        return send_location_request(to, "📍 לוחצים על *שליחת המיקום שלי* למטה (או 📎 ← מיקום כדי לבחור מקום אחר במפה)")
+    if reply and (reply.startswith("set:") or reply.startswith("st:") or reply in ("reset_yes", "reset_no")):
+        return settings_action(to, u, reply)
+    if text in ("התחל", "מחדש", "/start") or u["step"] == "new":
         if u["step"] == "new" and pr.get("home"):
             u["step"] = "keep"; save_users()
             return send_buttons(to, welcome(u) + "\n\nיש לי את ההעדפות שלך מהפעם הקודמת.", [("keep", "להמשיך איתן"), ("reset", "להתחיל מחדש")])
@@ -1088,7 +1159,9 @@ def handle(msg):
         if u["step"] == "loc":           # בלי שאלת "איך מגיעים": ברכב, כל הסניפים הקרובים (עלות הדלק בחישוב)
             pr.setdefault("mode", "car"); pr.setdefault("maxMin", 999); pr.setdefault("brand", "cheap")
             return ask(to, "clubq", u)
-        send_text(to, "עדכנתי את המיקום 👍"); save_users()
+        if u["step"] == "loccheck":      # משתמש חוזר שעדכן מיקום – ישר לקנייה
+            return ask(to, "basket", u, intro=f"עדכנתי: {place_name(pr['home'])} 👍\nמעולה, סיימנו 🎉\n\n")
+        u["step"] = "done"; send_text(to, f"עדכנתי את המיקום: {place_name(pr['home'])} 👍"); save_users()
         if u.get("items"): return finish(to, u)
         return
     if u["step"] == "loc":
