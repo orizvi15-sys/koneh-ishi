@@ -208,10 +208,12 @@ def _from_bin(path):
         return out
 
     stores = []
+    STORE_FIX = {"7290803800003-7": [31.8605, 34.8225]}   # יוחננוף עקרון – הכתובת "המלך חסן 1" מוקמה בטעות בשדרות
     for row in h["stores"]:
         key, chain, name, addr, city, lat, lng, blob, ts, prec = row[:10]
         cblob = row[10] if len(row) > 10 else -1
         pblob = row[11] if len(row) > 11 else -1
+        if key in STORE_FIX: lat, lng = STORE_FIX[key]
         n, a = _display(chain, name, addr, city)
         stores.append({"key": key, "chain": chain, "n": n, "a": a, "p": [lat, lng], "blob": blob, "ts": ts, "prec": prec,
                        "cblob": cblob, "pblob": pblob})
