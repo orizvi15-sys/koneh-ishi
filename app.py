@@ -32,6 +32,11 @@ DRY_RUN = os.environ.get("DRY_RUN") == "1"  # לבדיקות: מדפיס במק�
 # ---------- נתונים ----------
 import kdata  # הנתונים הארציים – kdata.D הוא תמיד הגרסה העדכנית
 FUEL, KM_PER_L, ROAD, CAR_KMH, WALK_KMH, PARK_MIN = 7.77, 13, 1.3, 28, 4.5, 3
+
+def car_min(d):
+    """זמן נסיעה משוער ברכב: 5 הק"מ הראשונים בעיר (28 קמ"ש), עד 15 ק"מ כביש בינעירוני (55), מעבר לזה כביש מהיר (75)"""
+    t = min(d, 5) / CAR_KMH + max(0, min(d, 15) - 5) / 55 + max(0, d - 15) / 75
+    return t * 60 + PARK_MIN
 MAX_POOL = 25
 STAY_MIN = 35           # פחות מזה – לא שווה לעזוב את הסופר הקבוע
 STAY_MIN_WEIGHED = 25   # כשמשווים רק מוצרים במשקל (קילו בשר, סלמון...) – סף נמוך יותר
@@ -392,6 +397,14 @@ def km(a, b):
     h = math.sin(dla / 2) ** 2 + math.cos(r(a[0])) * math.cos(r(b[0])) * math.sin(dlo / 2) ** 2
     return 2 * 6371 * math.asin(math.sqrt(h)) * ROAD
 
+# רשתות שהסניפים שלהן כשרים (לפי ידיעה כללית על הרשת – לא אומת סניף-סניף). אפשר לערוך את הרשימה.
+KOSHER_CHAINS = {"שופרסל", "רמי לוי", "יוחננוף", "אושר עד", "ויקטורי", "חצי חינם", "מחסני השוק", "קשת טעמים",
+                 "סופר ספיר", "שפע ברכת השם", "נתיב החסד", "סופר יודה"}
+def is_kosher(st):
+    return st["chain"] in KOSHER_CHAINS and not re.search(r"\bBE\b|Be\b", st["n"])   # BE – פארם
+
+def kosher_tag(st): return " · ✡️ סניף כשר" if is_kosher(st) else ""
+
 def full_name(st):
     """"רמי לוי – סניף עזריאלי חיפה" """
     ch, n = st["chain"], st["n"]
@@ -409,7 +422,7 @@ def compute(u):
     split_min = -1 if pr.get("splitMin", SPLIT_MIN) < 0 else SPLIT_MIN
     clubs = set(pr.get("clubs") or [])
     cost = lambda d: d * FUEL / KM_PER_L if car else 0
-    mins = lambda d: d / CAR_KMH * 60 + PARK_MIN if car else (d / BUS_KMH * 60 + BUS_WAIT if bus else d / WALK_KMH * 60)
+    mins = lambda d: car_min(d) if car else (d / BUS_KMH * 60 + BUS_WAIT if bus else d / WALK_KMH * 60)
     items, gone = [], []
     for it in u["items"]:
         i = resolve(D, it)
@@ -487,11 +500,11 @@ def compute(u):
         L.append(f"⚠️ _עדיין אין לי סניפים באזור שלך (הקרוב ביותר: {far_km:.0f} ק\"מ)._\n")
     inc = " (כולל עלות הנסיעה)" if car else ""
     if stay:
-        L.append(f"👍 הסופר הקבוע שלך משתלם: *{s['n']}*")
+        L.append(f"👍 הסופר הקבוע שלך משתלם: *{s['n']}*" + kosher_tag(s))
         L.append(f"💰 מחיר הסל: *₪{best['tot']:.0f}*" + (" (במחירי מועדון)" if best.get("club") else ""))
         L.append(f"✅ זה הכי זול באזור 🏆" if gap < 1 else f"✅ במקום אחר היית חוסך רק ₪{gap:.0f}{inc} – לא שווה את הטרחה")
     else:
-        L.append(f"🏆 הסופר המנצח: *{s['n']}*")
+        L.append(f"🏆 הסופר המנצח: *{s['n']}*" + kosher_tag(s))
         L.append(f"💰 מחיר הסל: *₪{best['tot']:.0f}*" + (" (במחירי מועדון)" if best.get("club") else ""))
         if reg:
             L.append(f"✅ חוסך *₪{gap:.0f}* לעומת {reg['s']['n']}{inc}")
@@ -523,6 +536,7 @@ def compute(u):
             "others": (f"💡 אם מתחלקים בין *{split['A']['s']['n']}* ל*{split['B']['s']['n']}* חוסכים עוד *₪{best['tot'] - split['tot']:.0f}*\n\n" if split_txt else "")
                       + "🏪 *כל הסופרים בטווח:*\n\n" + "\n\n".join(
                 f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} *{full_name(r['s'])}*" + (" ⭐ _הקבוע שלך_" if r is reg else "") + "\n"
+                + ("      ✡️ סניף כשר\n" if is_kosher(r["s"]) else "") +
                 f"      📍 {r['s']['a']}\n      💰 ₪{r['tot']:.0f} · {round(r['min'])} דק'" + (f" _· חסרים {r['miss']}_" if r["miss"] else "")
                 for r in (inrange[:10] + ([reg] if reg and reg not in inrange[:10] else []))) + fresh,
             "split": split_txt}
@@ -747,7 +761,9 @@ def club_buttons(u):
     return [(f"club:{c}", ("✅ " if c in have else "") + c) for c in club_chains()] + [("clubdone", "סיימתי 👍")]
 
 def clubs_done(to, u):
-    if u.get("club_ctx") == "onb": return ask(to, "kosher", u)
+    if u.get("club_ctx") == "onb":       # סוף האבחון (בלי שאלת כשרות – מסמנים "סניף כשר" ליד הסניפים)
+        pr = u["prefs"]; pr.setdefault("splitMin", SPLIT_MIN); pr.pop("remind_off", None)
+        return ask(to, "basket", u, intro="מעולה, סיימנו 🎉\n\n")
     u["step"] = "done"; save_users()
     return send_text(to, "תודה, רשמתי 👍")
 
@@ -904,7 +920,7 @@ def price_answer(to, u, item):
         if i is None: continue
         g = D.group(i, x.get("src") or x["name"]); rows = []
         for s in near:
-            d1 = km(home, s["p"]); mn = d1 / CAR_KMH * 60 + PARK_MIN if pr["mode"] == "car" else (d1 / BUS_KMH * 60 + BUS_WAIT if pr["mode"] == "bus" else d1 / WALK_KMH * 60)
+            d1 = km(home, s["p"]); mn = car_min(d1) if pr["mode"] == "car" else (d1 / BUS_KMH * 60 + BUS_WAIT if pr["mode"] == "bus" else d1 / WALK_KMH * 60)
             if rows and mn > pr["maxMin"]: break
             p = gp(D.store_prices(s, clubs), dict(x, i=i, g=g))
             if p is not None: rows.append((p, d1, s))
@@ -1021,7 +1037,9 @@ def handle(msg):
 
     if t == "location":
         pr["home"] = [msg["location"]["latitude"], msg["location"]["longitude"]]
-        if u["step"] == "loc": return ask(to, "mode", u)
+        if u["step"] == "loc":           # בלי שאלת "איך מגיעים": ברכב, כל הסניפים הקרובים (עלות הדלק בחישוב)
+            pr.setdefault("mode", "car"); pr.setdefault("maxMin", 999); pr.setdefault("brand", "cheap")
+            return ask(to, "clubq", u)
         send_text(to, "עדכנתי את המיקום 👍"); save_users()
         if u.get("items"): return finish(to, u)
         return
