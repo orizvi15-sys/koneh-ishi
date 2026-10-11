@@ -1309,11 +1309,11 @@ def handle(msg):
 
     if text in ("/stats", "סטטיסטיקה"):
         meta = USERS.setdefault("_meta", {})
-        admins = set(filter(None, os.environ.get("ADMIN_CHAT", "").split(","))) | set(meta.get("admins", []))
-        if not admins:                       # הראשון ששולח /stats נהיה המנהל
-            meta["admins"] = [to]; save_users(); admins = {to}
+        adm = set(filter(None, os.environ.get("ADMIN_CHAT", "").split(","))) | set(meta.get("admins", []))
+        if not adm:                          # הראשון ששולח /stats נהיה המנהל
+            meta["admins"] = [to]; save_users(); adm = {to}
             send_text(to, "רשמתי אותך כמנהל הבוט 🔐 רק אתה תוכל לראות את הנתונים.")
-        if to not in admins: return send_text(to, "לא הבנתי 🙂")
+        if to not in adm: return send_text(to, "לא הבנתי 🙂")
         return send_text(to, stats_text())
     if text in ("/selftest", "בדיקה עצמית") and to in admins():
         typing(to); probs, summ = selftest()
