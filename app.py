@@ -513,7 +513,11 @@ def compute(u):
     if car and best["fuel"] >= 1: det.append(f"\n⛽ דלק הלוך-חזור: ₪{best['fuel']:.0f}")
     fresh = f"\n\n_מחירים ומבצעים מעודכנים ל-{D.built[8:10]}/{D.built[5:7]} {D.built[11:16]}_" if len(D.built) >= 16 else ""
     saved = 0 if stay else (gap if reg else (avg - best["tot"] if avg else 0))
-    return {"main": "\n".join(L), "store": s["n"], "saved": max(0, round(saved)),
+    ip = {}
+    for it in items:                                   # מחיר כל מוצר בסופר המומלץ (ל"מה זיהיתי")
+        p = gp(best["P"], it)
+        ip[it.get("code", "")] = [round((p if p is not None else med[it["i"]]) * it["qty"], 2), p is None]
+    return {"main": "\n".join(L), "store": s["n"], "saved": max(0, round(saved)), "ip": ip,
             "nav": f"https://waze.com/ul?ll={s['p'][0]},{s['p'][1]}&navigate=yes",
             "details": f"📋 *הסל שלך ב{s['n']}:*\n" + "\n".join(det) + fresh,
             "others": (f"💡 אם מתחלקים בין *{split['A']['s']['n']}* ל*{split['B']['s']['n']}* חוסכים עוד *₪{best['tot'] - split['tot']:.0f}*\n\n" if split_txt else "")
@@ -559,7 +563,7 @@ def finish(to, u, redo=False):
     if isinstance(res, list):
         for m in res: send_text(to, m)
     else:
-        u["last"] = {k: res[k] for k in ("details", "others", "split", "store")}; saved = res.get("saved", 0)
+        u["last"] = {k: res[k] for k in ("details", "others", "split", "store", "ip")}; saved = res.get("saved", 0)
         n, miss = len(u["items"]), len(u.get("missed") or [])
         main = res["main"] + f"\n🧾 זיהיתי {n} מוצרים" + (f" ({miss} לא נמצאו)" if miss else "")
         if u.get("note"): main += "\n\n" + u.pop("note")
@@ -748,11 +752,23 @@ def clubs_done(to, u):
     return send_text(to, "תודה, רשמתי 👍")
 
 def understood_text(u, missed=()):
-    L = ["🧾 *הבנתי כך:*"]
-    for x in u["items"][:25]:
-        q = f" ×{x['qty']:g}" if x["qty"] != 1 else ""
-        L.append(f"• {x['src']}{q} ← {x['name']}" if x["src"] != x["name"] else f"• {x['name']}{q}")
-    if len(u["items"]) > 25: L.append(f"…ועוד {len(u['items']) - 25}")
+    last = u.get("last") or {}; ip = last.get("ip") or {}
+    L = [f"🧾 *זיהיתי {len(u['items'])} מוצרים*" + (f" – מחירים ב{last['store']}:" if ip and last.get("store") else ":"), ""]
+    tot = 0
+    def toks(t): return {kdata.stem(w) for w in kdata.toks(t)}
+    for x in u["items"][:45]:
+        kg = 'לק"ג' in x["name"]
+        q = (f" ×{x['qty']:g} ק\"ג" if kg else f" ×{x['qty']:g}") if x["qty"] != 1 else ""
+        nm = x["name"].replace(' (לק"ג)', "")
+        src = x.get("src") or ""
+        a, b = toks(src), toks(x["name"])
+        alt = f" _(כתבת: {src})_" if src and a and len(a & b) < 0.5 * len(a) else ""   # הצגה רק כשהזיהוי שונה ממה שנכתב
+        pr = ip.get(x.get("code", ""))
+        price = (f" – {'~' if pr[1] else ''}₪{pr[0]:.2f}" if pr else "")
+        if pr: tot += pr[0]
+        L.append(f"• {nm}{q}{price}{alt}")
+    if len(u["items"]) > 45: L.append(f"…ועוד {len(u['items']) - 45}")
+    if tot: L.append(f"\n💰 *סה\"כ: ₪{tot:.2f}*" + ("\n_~ = חסר בסניף, לפי מחיר ממוצע באזור_" if any(v[1] for v in ip.values()) else ""))
     if missed: L.append("\n❓ לא מצאתי: " + ", ".join(missed[:8]))
     return "\n".join(L)
 
