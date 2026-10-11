@@ -133,8 +133,14 @@ class Data:
             it = self.items[i]
             if not it[0][0].isdigit() and len(q) <= 3: s += 1
             first = toks(it[1])[:1]
-            if first and stem(first[0]) == stem(q[0]): s += 0.6   # "אורז בסמטי" לפני "קובה אורז"
+            canon = False
+            if first and stem(first[0]) == stem(q[0]):
+                s += 0.6   # "אורז בסמטי" לפני "קובה אורז"
+                st = {stem(x) for x in self.itoks[i]}
+                canon = all(w in self.itoks[i] or stem(w) in st for w in q)
             sc = s / (len(q) + 0.3 * len(self.itoks[i])) + 0.35 * it[2] / self.max_avail
+            if canon:   # בקשה כללית ("במבה") – המוצר הנפוץ ביותר מהסוג הזה
+                sc += 0.5 + 3.0 * it[2] / self.max_avail
             if sc > 0.4: out.append((sc, i))
         return [i for _, i in sorted(out, reverse=True)[:n]]
 

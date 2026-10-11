@@ -257,7 +257,8 @@ def match_items(items):
                     i = int(r["i"]); k = r.get("pick")
                     picks[i] = None if k is None or not cand[i] or int(k) >= len(cand[i]) else cand[i][int(k)]
                 except Exception: pass
-    found = [item_of(d, picks[i], it["qty"], it["name"]) for i, it in enumerate(items) if picks[i] is not None]
+    found = [dict(item_of(d, picks[i], it["qty"], it["name"]), c=[d.items[k][0] for k in cand[i] if k != picks[i]][:4])
+             for i, it in enumerate(items) if picks[i] is not None]
     missed = [it["name"] for i, it in enumerate(items) if picks[i] is None]
     return found, missed
 
@@ -449,15 +450,18 @@ def ask(to, step, u, intro=""):
             send_buttons(to, intro + "*ומה קונים?*", [("cam", "📷 צילום קבלה"), ("list", "✍️ אכתוב רשימה"), ("weekly", "🛒 סל שבועי רגיל")])
     save_users()
 
-def finish(to, u):
+def finish(to, u, redo=False):
     res = compute(u)
     if isinstance(res, list):
         for m in res: send_text(to, m)
     else:
         u["last"] = {k: res[k] for k in ("details", "others", "split")}
         send_buttons(to, res["main"], [("oth", "🏪 הצג סופרים אחרים")])
-    u["hist"] = (u["hist"] + [{"d": int(time.time()), "items": [{"code": x.get("code", ""), "name": x["name"], "src": x.get("src", ""), "qty": x["qty"]} for x in u["items"]]}])[-12:]
+    entry = {"d": int(time.time()), "items": [{"code": x.get("code", ""), "name": x["name"], "src": x.get("src", ""), "qty": x["qty"]} for x in u["items"]]}
+    if redo and u["hist"]: u["hist"][-1] = entry          # תיקון – מחליפים את הקנייה האחרונה במקום להוסיף
+    else: u["hist"] = (u["hist"] + [entry])[-12:]
     u["step"] = "done"; save_users()
+    if redo: return
     if len(u["hist"]) == 1:
         send_text(to, "_שמרתי את הקנייה כדי ללמוד את ההרגלים שלך. מתי שרוצים – פשוט כותבים *היי* 🙂_")
     pr = u["prefs"]; n = len(u["hist"])
@@ -513,12 +517,21 @@ def ask_clubs(to, u, first=False):
     return send_buttons(to, "שאלה קטנה אחרונה 🙂 *באיזה מועדון לקוחות אתה חבר?*",
                         [(f"club:{c}", c) for c in CLUBS] + [("club:none", "אף אחד")])
 
+def understood_text(u, missed=()):
+    L = ["🧾 *הבנתי כך:*"]
+    for x in u["items"][:25]:
+        q = f" ×{x['qty']:g}" if x["qty"] != 1 else ""
+        L.append(f"• {x['src']}{q} ← {x['name']}" if x["src"] != x["name"] else f"• {x['name']}{q}")
+    if len(u["items"]) > 25: L.append(f"…ועוד {len(u['items']) - 25}")
+    if missed: L.append("\n❓ לא מצאתי: " + ", ".join(missed[:8]))
+    return "\n".join(L)
+
 def got_items(to, u, items):
     found, missed = match_items(items)
-    msg = f"מצאתי מחירים ל-*{len(found)}* מתוך {len(items)} מוצרים."
-    if missed: msg += "\nלא נמצאו: " + ", ".join(missed[:8])
-    send_text(to, msg)
-    if not found: return
+    if not found:
+        return send_text(to, "לא מצאתי את המוצרים האלה במאגר 🙁 נסה לכתוב אותם קצת אחרת." + (f"\n({', '.join(missed[:8])})" if missed else ""))
+    u["items"] = found
+    send_buttons(to, understood_text(u, missed), [("fix", "✏️ משהו לא נכון")])
     have = {x["code"] for x in found}
     forgot = [x for x in learned(u) if x["code"] not in have and x["freq"] >= 2][:5]
     u["items"] = found
@@ -581,6 +594,35 @@ def handle(msg):
         return send_text(to, "תודה, רשמתי 👍")
     if reply in ("kreg", "kmeh"):
         pr["kosher"] = reply[1:]; save_users(); return send_text(to, "רשמתי 👍")
+    if reply == "fix" or (reply and reply.startswith(("fix:", "alt:", "del:"))):
+        its = u.get("items") or []
+        if not its: return send_text(to, "אין כרגע סל לתקן – כתבו *היי* כדי להתחיל 🙂")
+        if reply == "fix":
+            btns = [(f"fix:{k}", f"{k + 1}. {x['src'][:28]}") for k, x in enumerate(its[:20])] + [("fixdone", "✅ הכל נכון")]
+            return send_buttons(to, "על איזה מוצר לתקן?", btns)
+        k = int(reply.split(":")[1])
+        if k >= len(its): return
+        x = its[k]
+        if reply.startswith("fix:"):
+            d = kdata.D
+            opts = [(f"alt:{k}:{j}", d.items[d.code2i[c]][1][:40]) for j, c in enumerate(x.get("c", [])) if c in d.code2i]
+            if not opts:  # אין חלופות שמורות – מחפשים מחדש
+                x["c"] = [d.items[i][0] for i in d.search(x["src"], 6) if d.items[i][0] != x.get("code")][:4]; save_users()
+                opts = [(f"alt:{k}:{j}", d.items[d.code2i[c]][1][:40]) for j, c in enumerate(x["c"])]
+            return send_buttons(to, f"*{x['src']}* – התכוונת ל:", opts + [(f"del:{k}", "🗑️ להוריד מהסל"), ("fix", "↩️ חזרה")])
+        if reply.startswith("alt:"):
+            j = int(reply.split(":")[2]); d = kdata.D
+            c = x.get("c", [])[j] if j < len(x.get("c", [])) else None
+            if c not in d.code2i: return
+            old_code = x["code"]
+            its[k] = dict(item_of(d, d.code2i[c], x["qty"], x["src"]), c=[old_code] + [z for z in x.get("c", []) if z != c][:3])
+        else:
+            its.pop(k)
+            if not its: u["items"] = []; save_users(); return send_text(to, "הסל ריק עכשיו 🙂 אפשר לכתוב רשימה חדשה.")
+        send_text(to, "עודכן ✅ מחשב מחדש…")
+        return finish(to, u, redo=True)
+    if reply == "fixdone":
+        return send_text(to, "מעולה 👍")
     if reply in ("det", "oth", "spl"):
         txt = (u.get("last") or {}).get({"det": "details", "oth": "others", "spl": "split"}[reply])
         return send_text(to, txt or "אין לי עדיין חישוב להציג – כתבו *היי* כדי להתחיל קנייה 🙂")
