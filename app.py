@@ -145,9 +145,14 @@ def graph_post(path, payload):
     except urllib.error.HTTPError as e:
         print("Graph error", e.code, e.read()[:500]); return {}
 
-def send_text(to, text):
+M_NEW, M_CAM, M_SET = "🛒 קנייה חדשה", "📷 צילום קבלה", "⚙️ הגדרות"
+MENU = {"keyboard": [[{"text": M_NEW}, {"text": M_CAM}], [{"text": M_SET}]], "resize_keyboard": True, "is_persistent": True}
+
+def send_text(to, text, menu=False):
     if is_tg(to):
-        return tg_call("sendMessage", {"chat_id": to[3:], "text": tg_html(text[:4000]), "parse_mode": "HTML", "disable_web_page_preview": True})
+        body = {"chat_id": to[3:], "text": tg_html(text[:4000]), "parse_mode": "HTML", "disable_web_page_preview": True}
+        if menu: body["reply_markup"] = MENU   # כפתורים קבועים בתחתית המסך
+        return tg_call("sendMessage", body)
     graph_post(f"{PHONE_ID}/messages", {"messaging_product": "whatsapp", "to": to, "type": "text",
                                          "text": {"body": text[:4000], "preview_url": True}})
 
@@ -536,9 +541,14 @@ def handle(msg):
     if text == "מחק אותי":
         USERS.pop(to, None); save_users()
         return send_text(to, "מחקתי את כל המידע שלך 🗑️ כדי להתחיל מחדש כתבו היי.")
-    if GREET.match(text) and len(text) <= 25:
+    if text == M_CAM:
+        reply, text = "cam", ""
+    elif text == M_SET:
+        text = "הגדרות"
+    if text == M_NEW or (GREET.match(text) and len(text) <= 25):
         if all(k in pr for k in PROFILE_KEYS):
-            return ask(to, "basket", u, intro=f"היי{' ' + u['name'] if u.get('name') else ''}! 👋 טוב לראות אותך שוב.\n\n")
+            send_text(to, f"היי{' ' + u['name'] if u.get('name') else ''}! 👋", menu=True)
+            return ask(to, "basket", u)
         send_text(to, welcome(u)); return ask(to, "loc", u)
     if text in ("הגדרות", "התחל", "מחדש", "/start", "/settings") or u["step"] == "new":
         if u["step"] == "new" and pr.get("home"):
@@ -561,7 +571,8 @@ def handle(msg):
     if reply in HH and u["step"] == "hh": pr["hh"] = reply; return ask(to, "brand", u)
     if reply in ("bmine", "bcheap", "bdep"):
         pr["brand"] = reply[1:]; pr.setdefault("splitMin", SPLIT_MIN); pr.pop("remind_off", None)
-        return ask(to, "basket", u, intro="מעולה, סיימנו 🎉\n\n")
+        send_text(to, "מעולה, סיימנו 🎉\nלמטה יש לך כפתורים קבועים – קנייה חדשה, צילום קבלה והגדרות 👇", menu=True)
+        return ask(to, "basket", u)
     if reply in ("s0", "s30", "sno"): pr["splitMin"] = {"s0": SPLIT_MIN, "s30": SPLIT_MIN, "sno": -1}[reply]; return ask(to, "basket", u)
     if reply and reply.startswith("club:"):
         c = reply[5:]
