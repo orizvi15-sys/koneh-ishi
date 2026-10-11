@@ -753,6 +753,33 @@ def understood_text(u, missed=()):
     if missed: L.append("\n❓ לא מצאתי: " + ", ".join(missed[:8]))
     return "\n".join(L)
 
+# ---------- הודעות קוליות (תמלול) ----------
+GROQ_KEY = os.environ.get("GROQ_API_KEY", "")
+OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
+
+def transcribe(audio, fname="voice.ogg"):
+    """תמלול לעברית: Groq (חינמי) ואם אין – OpenAI. מחזיר טקסט או None"""
+    if GROQ_KEY: url, key, model = "https://api.groq.com/openai/v1/audio/transcriptions", GROQ_KEY, "whisper-large-v3"
+    elif OPENAI_KEY: url, key, model = "https://api.openai.com/v1/audio/transcriptions", OPENAI_KEY, "whisper-1"
+    else: return None
+    b = "----koneh" + base64.b16encode(os.urandom(8)).decode()
+    parts = []
+    for k, v in (("model", model), ("language", "he"), ("response_format", "json"),
+                 ("prompt", "רשימת קניות לסופר: חלב, לחם, ביצים, קוטג', חזה עוף, במבה")):
+        parts.append(f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode())
+    parts.append(f'--{b}\r\nContent-Disposition: form-data; name="file"; filename="{fname}"\r\nContent-Type: audio/ogg\r\n\r\n'.encode() + audio + b"\r\n")
+    body = b"".join(parts) + f"--{b}--\r\n".encode()
+    req = urllib.request.Request(url, data=body, headers={"Authorization": f"Bearer {key}", "Content-Type": f"multipart/form-data; boundary={b}",
+                                                         "User-Agent": "koneh-ishi-bot"})
+    try:
+        return (json.load(urllib.request.urlopen(req, timeout=60)).get("text") or "").strip() or None
+    except urllib.error.HTTPError as e:
+        print("STT error", e.code, e.read()[:300], flush=True)
+    except Exception as e:
+        print("STT error", e, flush=True)
+    return None
+
+
 # ---------- הבנת טקסט חופשי ----------
 UNDERSTAND = """You parse messages for "קונה אישי", an Israeli Telegram bot that compares supermarket basket prices near the user.
 User message (Hebrew): <<{text}>>
@@ -1040,6 +1067,18 @@ def handle(msg):
         typing(to)
         return finish(to, u)
 
+    if t == "voice":
+        if not (GROQ_KEY or OPENAI_KEY):
+            return send_text(to, "הודעות קוליות עוד לא מופעלות 🎤 בינתיים אפשר לכתוב את הרשימה ✍️")
+        if msg["voice"].get("sec", 0) > 180:
+            return send_text(to, "ההקלטה ארוכה מדי 🙂 עד 3 דקות בבקשה.")
+        try: audio, _ = download_media(msg["voice"]["id"])
+        except Exception as e:
+            print("voice download error", e, flush=True); return send_text(to, "לא הצלחתי להוריד את ההקלטה 🙁 נסו שוב.")
+        heard = transcribe(audio)
+        if not heard: return send_text(to, "לא הצלחתי להבין את ההקלטה 🙁 נסו שוב בשקט יותר, או כתבו ✍️")
+        send_text(to, f"🎤 _שמעתי:_ {heard}")
+        return handle({**msg, "type": "text", "text": {"body": heard}})
     if t == "image":
         if not CLAUDE_KEY:
             return send_text(to, "קריאת קבלות עוד לא מופעלת. אפשר לכתוב את הרשימה בהודעה ✍️")
@@ -1087,6 +1126,9 @@ def tg_to_msg(up):
         return {**base, "type": "image", "image": {"id": "tg:" + doc["file_id"], "mime": doc["mime_type"]}}
     if "text" in m:
         return {**base, "type": "text", "text": {"body": m["text"]}}
+    v = m.get("voice") or m.get("audio")
+    if v:
+        return {**base, "type": "voice", "voice": {"id": "tg:" + v["file_id"], "sec": v.get("duration", 0)}}
     return {**base, "type": "unknown"}
 
 # ---------- שרת ----------
