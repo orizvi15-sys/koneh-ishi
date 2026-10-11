@@ -425,7 +425,7 @@ def compute(u):
             "split": split_txt}
 
 # ---------- שיחה ----------
-WELCOME = "*קונה אישי 🛒*\nהיי{name}! אני אעזור לך לחסוך בקניות בסופר.\n6 שאלות קצרות (כ-20 שניות) ומתחילים 👇"
+WELCOME = "היי{name}! 👋 אני אעזור לך לחסוך בקניות 🛒\nכמה שאלות קצרות ומתחילים 😊"
 def welcome(u): return WELCOME.format(name=" " + u["name"] if u.get("name") else "")
 PROFILE_KEYS = ("home", "mode", "maxMin", "splitMin")
 GREET = re.compile(r"^\W*(הי+|שלום|אהלן|הלו|יו|מה קורה|מה נשמע|מה המצב|מה הולך|מה איתך|בוקר טוב|ערב טוב|צהריים טובים|hi+|hey|hello|start)\b[^,\n]*$", re.I)
@@ -433,18 +433,18 @@ GREET = re.compile(r"^\W*(הי+|שלום|אהלן|הלו|יו|מה קורה|מה
 def ask(to, step, u, intro=""):
     u["step"] = step
     if step == "loc":
-        send_location_request(to, "*1️⃣ מאיפה יוצאים לקניות?*\nלוחצים על הכפתור ושולחים מיקום 📍")
+        send_location_request(to, intro + "📍 *מאיפה יוצאים לקניות?*\nלוחצים על הכפתור למטה")
     elif step == "mode":
-        send_buttons(to, "*2️⃣ איך מגיעים לסופר?*", [("car", "🚗 ברכב"), ("walk", "🚶 ברגל"), ("bus", "🚌 תחבורה ציבורית")])
+        send_buttons(to, "🚗 *איך מגיעים לסופר?*", [("car", "🚗 ברכב"), ("walk", "🚶 ברגל"), ("bus", "🚌 תחבורה ציבורית")])
     elif step == "range":
-        send_buttons(to, "*3️⃣ כמה רחוק שווה לך לנסוע כדי לחסוך?*", [("r5", "עד 5 דקות"), ("r15", "עד 15 דקות"), ("rall", "לא משנה")])
+        send_buttons(to, "⏱️ *כמה רחוק שווה לך לנסוע?*", [("r5", "עד 5 דקות"), ("r15", "עד 15 דקות"), ("rall", "לא משנה")])
     elif step == "hh":
-        send_buttons(to, "*4️⃣ כמה אנשים בבית?*", [("hh12", "1–2"), ("hh34", "3–4"), ("hh5", "5+")])
+        send_buttons(to, "👨‍👩‍👧 *כמה אנשים בבית?*", [("hh12", "1–2"), ("hh34", "3–4"), ("hh5", "5+")])
     elif step == "brand":
-        send_buttons(to, "*5️⃣ כשאתה כותב \"חלב\" – מה חשוב לך?*",
+        send_buttons(to, "🏷️ *מותג קבוע או הכי זול?*",
                      [("bmine", "המותג שאני רגיל אליו"), ("bcheap", "הכי זול מאותו סוג"), ("bdep", "תלוי במוצר")])
     elif step == "kosher":
-        send_buttons(to, "*6️⃣ יש העדפת כשרות?*", [("kreg", "רגיל"), ("kmeh", "מהדרין בלבד")])
+        send_buttons(to, "✡️ *יש העדפת כשרות?*", [("kreg", "רגיל"), ("kmeh", "מהדרין בלבד")])
     elif step == "split":
         send_buttons(to, "*4️⃣ מוכן לקנות בשני סופרים אם חוסכים?*", [("s0", "כן"), ("s30", "רק אם מעל ₪30"), ("sno", "לא, סופר אחד")])
     elif step == "basket":
@@ -641,8 +641,7 @@ def handle(msg):
         u["prefs"] = {}; u.pop("remind_at", None); u.pop("items", None); u.pop("last", None)
         if full: u["hist"] = []; u.pop("receipts", None); u.pop("last_receipt", None)
         save_users()
-        send_text(to, "🔄 מתחילים את האבחון מחדש – כל השאלות מההתחלה" + (" (כולל מחיקת היסטוריית הקניות)" if full else "") + ".")
-        send_text(to, welcome(u)); return ask(to, "loc", u)
+        return ask(to, "loc", u, intro=("🔄 " if not full else "🔄🧹 ") + welcome(u) + "\n\n")
     if text == "מחק אותי":
         USERS.pop(to, None); save_users()
         return send_text(to, "מחקתי את כל המידע שלך 🗑️ כדי להתחיל מחדש כתבו היי.")
@@ -654,12 +653,12 @@ def handle(msg):
         if all(k in pr for k in PROFILE_KEYS):
             send_text(to, f"היי{' ' + u['name'] if u.get('name') else ''}! 👋", menu=True)
             return ask(to, "basket", u)
-        send_text(to, welcome(u)); return ask(to, "loc", u)
+        return ask(to, "loc", u, intro=welcome(u) + "\n\n")
     if text in ("הגדרות", "התחל", "מחדש", "/start", "/settings") or u["step"] == "new":
         if u["step"] == "new" and pr.get("home"):
             u["step"] = "keep"; save_users()
             return send_buttons(to, welcome(u) + "\n\nיש לי את ההעדפות שלך מהפעם הקודמת.", [("keep", "להמשיך איתן"), ("reset", "להתחיל מחדש")])
-        send_text(to, welcome(u)); return ask(to, "loc", u)
+        return ask(to, "loc", u, intro=welcome(u) + "\n\n")
     if reply == "keep": return ask(to, "basket", u)
     if reply == "reset": u["prefs"] = {}; return ask(to, "loc", u)
 
