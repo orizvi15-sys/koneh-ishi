@@ -42,6 +42,7 @@ def car_min(d):
 MAX_POOL = 25
 STAY_MIN = 35           # פחות מזה – לא שווה לעזוב את הסופר הקבוע
 STAY_MIN_WEIGHED = 25   # כשמשווים רק מוצרים במשקל (קילו בשר, סלמון...) – סף נמוך יותר
+MAX_MISSING = 4         # סניף שחסרים בו 4 מוצרים ומעלה – לא מוצג
 SPLIT_MIN = 40          # מציעים לפצל בין שני סופרים רק אם חוסכים יותר מ-₪40
 BUS_KMH, BUS_WAIT = 15, 10  # כמה סניפים קרובים לכל היותר נבדקים בכל חישוב
 WEEKLY = [["חלב 3% בקרטון 2 ליטר", 2], ["גבינת קוטג 5% 250 גרם", 2], ["לחם אחיד פרוס 900 גר פיקוח אנג`ל", 2],
@@ -461,10 +462,11 @@ def compute(u):
         r.update(mlist=mlist, have=have, sum=tot, fuel=cost(r["d"]), tot=tot + cost(r["d"]), miss=miss)
     nearest = rows[0]
     reg = next((r for r in rows if r["s"]["key"] == uk), None)
-    if reg and reg["miss"] > 0.3 * len(items): reg = None     # כנראה זיהוי סניף שגוי (או חנות שלא מוכרת את רוב הסל)
+    ok_miss = lambda r: r["miss"] < MAX_MISSING and r["miss"] * 2 < len(items)   # עד 3 חסרים (ופחות מחצי הסל)
+    if reg and not ok_miss(reg): reg = None     # כנראה זיהוי סניף שגוי (או חנות שלא מוכרת את רוב הסל)
     pool = [r for r in rows if r["min"] <= pr["maxMin"] or r is reg] or [nearest]
     # סניף שחסרים בו הרבה מהמוצרים לא באמת עונה על הסל
-    full = [r for r in pool if r["miss"] <= 0.3 * len(items)]       # סניף שחסרים בו יותר מ-30% מהסל – לא נחשב ולא מוצג
+    full = [r for r in pool if ok_miss(r)]          # סניף שחסרים בו 4+ מוצרים (או חצי מהסל) – לא נחשב ולא מוצג
     inrange = sorted(full or pool, key=lambda r: r["tot"])
     if full: pool = full
     ranked = sorted(pool, key=lambda r: r["tot"]); best = ranked[0]
