@@ -814,8 +814,37 @@ def understand(text, u):
     return r
 
 
-def act_on(to, u, r):
+# מוצר כללי מדי ("בשר", "גבינה") – שואלים איזה סוג לפני שמשווים
+VAGUE = {
+    "בשר": [("בשר בקר טחון", "🥩 טחון"), ("בשר בקר לבישול", "🍲 בקר לבישול"), ("אנטריקוט", "🥩 אנטריקוט"), ("חזה עוף", "🍗 חזה עוף")],
+    "עוף": [("חזה עוף", "חזה"), ("שניצל עוף", "שניצל"), ("פרגיות", "פרגיות"), ("כרעיים עוף", "כרעיים"), ("עוף שלם", "עוף שלם")],
+    "דג": [("פילה סלמון", "🐟 סלמון"), ("אמנון", "🐟 אמנון"), ("דניס", "🐟 דניס"), ("לברק", "🐟 לברק")],
+    "גבינה": [("גבינה צהובה", "🧀 צהובה"), ("קוטג' 5%", "קוטג'"), ("גבינה לבנה 5%", "גבינה לבנה"), ("גבינה בולגרית", "בולגרית")],
+}
+VAGUE_ALIAS = {"בשרים": "בשר", "בשר בקר": "בשר", "עופות": "עוף", "דגים": "דג", "גבינות": "גבינה"}
+Q_VAGUE = {"בשר": "🥩 איזה בשר?", "עוף": "🍗 איזה עוף?", "דג": "🐟 איזה דג?", "גבינה": "🧀 איזו גבינה?"}
+
+def vague_kind(name):
+    n = re.sub(r"(?<![א-ת])(טרי|טריים|טרייה|טריות|טוב|טובה|איכותי|רגיל|רגילה|קצת|של)(?![א-ת])", " ", name)
+    n = " ".join(n.split())
+    n = VAGUE_ALIAS.get(n, n)
+    return n if n in VAGUE else None
+
+def ask_vague(to, u):
+    pv = u["vague"]
+    for k in range(pv["k"], len(pv["items"])):
+        kind = vague_kind(pv["items"][k]["name"])
+        if kind:
+            pv["k"] = k; u["vague_kind"] = kind; save_users()
+            return send_buttons(to, Q_VAGUE[kind], [(f"v:{j}", t) for j, (_, t) in enumerate(VAGUE[kind])])
+    r = {"intent": pv["intent"], "items": pv["items"]}; u.pop("vague", None); u.pop("vague_kind", None)
+    return act_on(to, u, r, asked=True)
+
+def act_on(to, u, r, asked=False):
     intent, its = r["intent"], r["items"]
+    if not asked and intent in ("list", "add", "price") and any(vague_kind(x["name"]) for x in its):
+        u["vague"] = {"intent": intent, "items": its, "k": 0}
+        return ask_vague(to, u)
     if intent in ("add", "remove") and not u.get("items"): intent = "list" if intent == "add" else "chat"
     if intent != "chat" and not its: intent = "chat"
     if intent == "chat":
@@ -848,16 +877,20 @@ def price_answer(to, u, item):
     """שאלה על מוצר אחד: איפה הכי זול באזור (לפי המיקום וטווח הנסיעה מהאבחון)"""
     found, _ = match_items([item])
     if not found: return send_text(to, f"לא מצאתי את *{item['name']}* במאגר 🙁 נסו לכתוב קצת אחרת.")
-    x = found[0]; D = kdata.D; i = resolve(D, x)
+    x = found[0]; D = kdata.D
     pr = u["prefs"]; home = pr["home"]; clubs = set(pr.get("clubs") or [])
-    g = D.group(i, x.get("src") or x["name"])
-    rows = []
-    for s in sorted(D.stores, key=lambda s: km(home, s["p"]))[:MAX_POOL * 2]:
-        d1 = km(home, s["p"]); mn = d1 / CAR_KMH * 60 + PARK_MIN if pr["mode"] == "car" else (d1 / BUS_KMH * 60 + BUS_WAIT if pr["mode"] == "bus" else d1 / WALK_KMH * 60)
-        if rows and mn > pr["maxMin"]: break
-        p = gp(D.store_prices(s, clubs), dict(x, i=i, g=g))
-        if p is not None: rows.append((p, d1, s))
-        if len(rows) >= MAX_POOL: break
+    near = sorted(D.stores, key=lambda s: km(home, s["p"]))[:MAX_POOL * 2]
+    for code in [x["code"]] + list(x.get("c") or []):        # אם המוצר שנבחר לא נמכר באזור – מנסים את החלופה הבאה
+        i = D.code2i.get(code)
+        if i is None: continue
+        g = D.group(i, x.get("src") or x["name"]); rows = []
+        for s in near:
+            d1 = km(home, s["p"]); mn = d1 / CAR_KMH * 60 + PARK_MIN if pr["mode"] == "car" else (d1 / BUS_KMH * 60 + BUS_WAIT if pr["mode"] == "bus" else d1 / WALK_KMH * 60)
+            if rows and mn > pr["maxMin"]: break
+            p = gp(D.store_prices(s, clubs), dict(x, i=i, g=g))
+            if p is not None: rows.append((p, d1, s))
+            if len(rows) >= MAX_POOL: break
+        if len(rows) >= 2: break
     if not rows: return send_text(to, f"לא מצאתי את *{D.items[i][1]}* בסופרים באזור שלך 🙁")
     rows.sort(key=lambda r: r[0]); kg = 'לק"ג' in D.items[i][1]
     unit = " לק\"ג" if kg else ""
@@ -1060,6 +1093,11 @@ def handle(msg):
         pr.setdefault("hh", reply); f = HH[reply]
         u["items"] = weekly_items(f)
         send_text(to, f"הכנתי סל שבועי רגיל: {len(u['items'])} מוצרים (חלב, לחם, גבינות, ירקות, פירות ועוד)."); return finish(to, u)
+    if reply and reply.startswith("v:") and u.get("vague") and u.get("vague_kind") in VAGUE:
+        opts = VAGUE[u["vague_kind"]]; j = int(reply[2:])
+        if j < len(opts):
+            pv = u["vague"]; pv["items"][pv["k"]]["name"] = opts[j][0]; pv["k"] += 1
+        return ask_vague(to, u)
     if reply in ("addf", "noadd"):   # לא תלוי ב-step – כדי שלחיצה לא "תיתקע" (למשל אם השרת עלה מחדש באמצע)
         pend = u.pop("pending", [])
         if reply == "addf": u.setdefault("items", []).extend({k: x.get(k, "") for k in ("src", "code", "name", "qty")} for x in pend)
