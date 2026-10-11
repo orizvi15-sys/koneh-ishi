@@ -219,6 +219,13 @@ def _from_bin(path):
     return D_
 
 
+def _peek_version(path):
+    with open(path, "rb") as f:
+        if f.read(4) != b"KISH": return None
+        hl = struct.unpack("<I", f.read(4))[0]
+        return json.loads(zlib.decompress(f.read(hl))).get("v")
+
+
 def _from_local():
     prods = json.load(open(os.path.join(HERE, "data", "prices.json"), encoding="utf-8"))
     sts = json.load(open(os.path.join(HERE, "data", "stores.json"), encoding="utf-8"))
@@ -257,6 +264,8 @@ def load(force_download=True):
     if force_download and DATA_URL:
         try:
             t0 = time.time(); _download()
+            if D is not None and D.source == "remote" and _peek_version(CACHE_FILE) == D.version:
+                return D                                   # אותה גרסה – לא בונים מחדש (חוסך זיכרון ו-CPU)
             nd = _from_bin(CACHE_FILE)
             if D is None or nd.version != D.version:
                 threading.Thread(target=nd.warm, daemon=True).start()
