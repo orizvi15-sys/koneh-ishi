@@ -49,6 +49,25 @@ PRODUCE = [
  ('ענבים שחורים', r'^ענב(ים)? שחור'), ('נקטרינה', r'^נקטרינה'), ('אפרסק', r'^אפרסק'), ('שזיף אדום', r'^שזיף (אדום|שגיב)'),
 ]
 PRODUCE_RX = [(f"P{i:02d}", n, re.compile(rx)) for i, (n, rx) in enumerate(PRODUCE, 1)]
+# בשר, עוף ודגים טריים במשקל (מחיר לק"ג) – לכל רשת קוד פנימי משלה, מאחדים לפי שם. (שם, ביטוי, מחיר מינ'/מקס' לק"ג)
+NO_MEAT = r"(?!.*(מעושן|ממולא|מתובל|מרינד|שיפוד|נקניק|קפוא|מוקפא|פריך|מצופה|ציפוי|טבעול|טבעוני|צמחי|כבד|מבושל|צלוי|לחתול|לכלב|ברוטב))"
+MEAT = [
+ ("חזה עוף", r"^(פילה |נתחי |נתח )?חזה (עוף|של עוף)(?!.*טחון)" + NO_MEAT, 18, 85),
+ ("שניצל עוף טרי", r"^(שניצל|שניצלים)( עוף| חזה עוף| מחזה עוף)?( טרי| דק| פרוס)*$", 20, 85),
+ ("פרגיות", r"^(פרגית|פרגיות|סטייק פרגית)" + NO_MEAT, 25, 95),
+ ("כרעיים עוף", r"^(כרעיים|כרעי|כרע) (עוף|שלמים|שלם)" + NO_MEAT, 8, 45),
+ ("שוקיים עוף", r"^(שוקיים|שוקי|שוק) (עוף|תחתון)" + NO_MEAT, 8, 50),
+ ("כנפיים עוף", r"^(כנפיים|כנפי|כנף) עוף" + NO_MEAT, 6, 45),
+ ("עוף שלם", r"^עוף (שלם|טרי שלם)" + NO_MEAT, 8, 45),
+ ("בשר בקר טחון", r"^(בשר (בקר )?טחון|טחון (בקר|בשר)|בקר טחון)(?!.*(עוף|הודו|כבש))" + NO_MEAT, 30, 140),
+ ("בשר בקר לבישול", r"^(בשר בקר(?! טחון)|כתף בקר|צלי כתף|בשר לגולאש|גולאש|בשר בקר לבישול)" + NO_MEAT, 40, 170),
+ ("אנטריקוט", r"^(סטייק )?אנטריקוט" + NO_MEAT, 70, 320),
+ ("פילה סלמון", r"^(פילה |נתח )?סלמון" + NO_MEAT, 45, 170),
+ ("אמנון", r"^(דג |פילה )?אמנון" + NO_MEAT, 15, 90),
+]
+MEAT_RX = [(f"M{i:02d}", n, re.compile(rx), lo, hi) for i, (n, rx, lo, hi) in enumerate(MEAT, 1)]
+MEAT_WORDS = re.compile(r"עוף|בקר|טחון|הודו|כבש|סלמון|אמנון|דג |פרגי|שניצל|אנטריקוט|כרעי|שוק|כנפ")
+
 # מוצרי יסוד שלכל רשת יש להם קוד פנימי משלה – מתאימים לפי שם (לא רק שקילים)
 STAPLES = [("E01", "ביצים L (12 יח')", re.compile(r"^(12\s*)?ביצ(י|ים|ה)\b.*(\bL\b|גדול)")),
            ("E02", "ביצים M (12 יח')", re.compile(r"^(12\s*)?ביצ(י|ים|ה)\b.*(\bM\b|בינוני)"))]
@@ -246,6 +265,7 @@ def build_chain(files, chain, cities, now=None):
             print("promo parse error", f, ex)
 
     names, prices, promo, club = {}, {}, {}, {}
+    meat_seen = set()
     for key, items in per_store.items():
         row, prow, crow = {}, {}, {}
         for code, it in items.items():
@@ -259,6 +279,10 @@ def build_chain(files, chain, cities, now=None):
                   for pc, pn, R in PRODUCE_RX]
         groups += [(sc, [it for it in items.values() if R.search(it["name"]) and not STAPLE_BAD.search(it["name"]) and 8 <= it["price"] <= 30])
                    for sc, sn, R in STAPLES]
+        groups += [(mc, [it for it in items.values() if it["w"] and R.search(clean_produce(it["name"])) and lo <= it["price"] <= hi])
+                   for mc, mn, R, lo, hi in MEAT_RX]
+        for it in items.values():                               # דוגמאות לבדיקה: שמות בשר/עוף במשקל
+            if it["w"] and MEAT_WORDS.search(it["name"]) and len(meat_seen) < 150: meat_seen.add(f'{clean_produce(it["name"])} | {it["price"]}')
         for gc, its in groups:
             if not its: continue
             row[gc] = min(it["price"] for it in its)
@@ -269,6 +293,7 @@ def build_chain(files, chain, cities, now=None):
         if crow: club[key] = crow
     for pc, pn, R in PRODUCE_RX: names[pc] = f'{pn} (לק"ג)'
     for sc, sn, R in STAPLES: names[sc] = sn
+    for mc, mn, R, lo, hi in MEAT_RX: names[mc] = f'{mn} (לק"ג)'
     for key in prices:
         stores.setdefault(key, {"name": "", "addr": "", "city": "", "sub": ""})
     chain_he = {}
@@ -278,7 +303,9 @@ def build_chain(files, chain, cities, now=None):
            "stores": {k: dict(v, chain=chain_he[k], ts=latest.get(k, "")) for k, v in stores.items() if k in prices},
            "fmt": 2, "names": names, "prices": prices, "promo": promo, "club": club,
            "stats": {"store_files": len(kinds["stores"]), "price_files": len(kinds["price"]), "promo_files": len(kinds["promo"]),
-                     "stores_with_prices": len(prices), "promo_hits": promo_n, "stores_listed": len(stores), "stores_with_club": len(club)}}
+                     "stores_with_prices": len(prices), "promo_hits": promo_n, "stores_listed": len(stores), "stores_with_club": len(club),
+                     "meat_stores": sum(1 for r in prices.values() if any(k.startswith("M") for k in r))},
+           "meat_samples": sorted(meat_seen)}
     return out
 
 
