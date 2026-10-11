@@ -482,7 +482,7 @@ def apply_delta(prev, files, now):
                         if not old or it[f2][0] < old[0]: prev[part][key][c] = it[f2]
         except Exception as ex:
             print("delta promo parse error", f, ex)
-    prev["fetched"] = datetime.now(IL).isoformat(timespec="minutes")
+    if files: prev["fetched"] = datetime.now(IL).isoformat(timespec="minutes")   # בלי קבצים – לא "מעדכנים", כדי שההתראה על רשת תקועה תעבוד
     prev.setdefault("stats", {})["delta"] = {"files": len(files), "prices_changed": upd, "stores_updated": stores_upd, "promo_hits": promo_n}
     return upd, stores_upd, promo_n
 
