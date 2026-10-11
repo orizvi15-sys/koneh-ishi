@@ -552,16 +552,16 @@ def ask(to, step, u, intro=""):
     save_users()
 
 def finish(to, u, redo=False):
-    res = compute(u)
+    res = compute(u); saved = 0
     if isinstance(res, list):
         for m in res: send_text(to, m)
     else:
-        u["last"] = {k: res[k] for k in ("details", "others", "split", "store")}
+        u["last"] = {k: res[k] for k in ("details", "others", "split", "store")}; saved = res.get("saved", 0)
         n, miss = len(u["items"]), len(u.get("missed") or [])
         main = res["main"] + f"\n🧾 זיהיתי {n} מוצרים" + (f" ({miss} לא נמצאו)" if miss else "")
         if u.get("note"): main += "\n\n" + u.pop("note")
         send_buttons(to, main, [("seen", "🧾 מה זיהיתי"), ("oth", "🏪 סופרים אחרים")])
-    entry = {"d": int(time.time()), "items": [{"code": x.get("code", ""), "name": x["name"], "src": x.get("src", ""), "qty": x["qty"]} for x in u["items"]]}
+    entry = {"d": int(time.time()), "saved": saved, "items": [{"code": x.get("code", ""), "name": x["name"], "src": x.get("src", ""), "qty": x["qty"]} for x in u["items"]]}
     if redo and u["hist"]: u["hist"][-1] = entry          # תיקון – מחליפים את הקנייה האחרונה במקום להוסיף
     else: u["hist"] = (u["hist"] + [entry])[-12:]
     u["step"] = "done"; save_users()
@@ -571,6 +571,39 @@ def finish(to, u, redo=False):
     pr = u["prefs"]; n = len(u["hist"])
     if n >= 1 and "clubs" not in pr:                       # משתמשים ותיקים שלא נשאלו בפתיחה
         pr["clubs"] = []; return ask_clubs(to, u, first=True)
+
+
+# ---------- סיכום חיסכון ----------
+HEB_MONTHS = ["ינואר", "פברואר", "מרץ", "אפריל", "מאי", "יוני", "יולי", "אוגוסט", "ספטמבר", "אוקטובר", "נובמבר", "דצמבר"]
+
+def savings_text(u, y=None, m=None):
+    """סיכום לחודש (ברירת מחדל: החודש הנוכחי) + מתחילת הדרך"""
+    now = _dt.now(IL_TZ)
+    y, m = y or now.year, m or now.month
+    def ym(b): t = _dt.fromtimestamp(b["d"], IL_TZ); return t.year, t.month
+    month = [b for b in u.get("hist", []) if ym(b) == (y, m)]
+    tot_m = sum(b.get("saved", 0) for b in month); tot_all = sum(b.get("saved", 0) for b in u.get("hist", []))
+    if not month: return None
+    L = [f"💰 *סיכום חיסכון – {HEB_MONTHS[m - 1]}*", "", ("🛒 בדקת קנייה אחת" if len(month) == 1 else f"🛒 בדקת {len(month)} קניות")]
+    if tot_m >= 1:
+        L.append(f"✅ מצאתי לך חיסכון של *₪{tot_m:.0f}*" + (f" (בממוצע ₪{tot_m / len(month):.0f} לקנייה)" if len(month) > 1 else ""))
+    else:
+        L.append("👍 הסופר שלך כבר היה הכי משתלם – לא היה צריך להחליף")
+    if tot_all > tot_m + 1: L.append(f"🏅 מאז שהתחלת: *₪{tot_all:.0f}*")
+    return "\n".join(L)
+
+def monthly_summaries():
+    """ב-1 לחודש (מ-10:00) – סיכום החודש הקודם לכל מי שבדק בו קניות"""
+    now = _dt.now(IL_TZ)
+    if now.day != 1 or now.hour < 10: return
+    py, pm = (now.year, now.month - 1) if now.month > 1 else (now.year - 1, 12)
+    tag = f"{py}-{pm:02d}"
+    for to, u in list(USERS.items()):
+        if to.startswith("_") or not isinstance(u, dict) or not is_tg(to) or u.get("sum_sent") == tag: continue
+        txt = savings_text(u, py, pm)
+        u["sum_sent"] = tag
+        if txt: send_text(to, txt)
+    save_users()
 
 
 # ---------- לוח בקרה למנהל ----------
@@ -672,6 +705,8 @@ def _reminder_loop():
         time.sleep(60)
         try: watchdog()
         except Exception as ex: print("watchdog error", ex, flush=True)
+        try: monthly_summaries()
+        except Exception as ex: print("summary error", ex, flush=True)
         now = time.time()
         for to, u in list(USERS.items()):
             try:
@@ -883,6 +918,8 @@ def handle(msg):
             for k in ("receipts", "last_receipt", "stores", "rbuf_t", "note", "cam_tip", "missed", "pending"): u.pop(k, None)
         save_users()
         return ask(to, "loc", u, intro=("🔄 " if not full else "🔄🧹 ") + welcome(u) + "\n\n")
+    if re.fullmatch(r"(כמה חסכתי|חיסכון|סיכום|סיכום חיסכון|כמה חסכתי\?|/savings)", text):
+        return send_text(to, savings_text(u) or "עוד לא בדקת קניות החודש 🙂 שלחו רשימה או קבלה ואתחיל לספור.")
     if text == "מחק אותי":
         USERS.pop(to, None); save_users()
         return send_text(to, "מחקתי את כל המידע שלך 🗑️ כדי להתחיל מחדש כתבו היי.")
@@ -1133,7 +1170,8 @@ if __name__ == "__main__":
             tg_call("setMyDescription", {"description": "היי! אני קונה אישי 🛒 אני משווה מחירים בין הסופרים שלידך ואומר לך איפה הכי משתלם לקנות – כולל מבצעים ודלק. פשוט כותבים לי היי 👋"})
             tg_call("setMyShortDescription", {"short_description": "משווה מחירי סופרים לידך ואומר איפה הכי משתלם 🛒"})
             tg_call("setMyCommands", {"commands": [{"command": "start", "description": "להתחיל / קנייה חדשה"},
-                                                   {"command": "settings", "description": "לשנות מיקום והעדפות"}]})
+                                                   {"command": "settings", "description": "לשנות מיקום והעדפות"},
+                                                   {"command": "savings", "description": "כמה חסכתי החודש"}]})
         except Exception as ex:
             print("חיבור טלגרם נכשל:", ex)
     elif not TG_TOKEN:
