@@ -463,8 +463,9 @@ def compute(u):
     if reg and reg["miss"] > 0.3 * len(items): reg = None     # כנראה זיהוי סניף שגוי (או חנות שלא מוכרת את רוב הסל)
     pool = [r for r in rows if r["min"] <= pr["maxMin"] or r is reg] or [nearest]
     # סניף שחסרים בו הרבה מהמוצרים לא באמת עונה על הסל
-    inrange = sorted(pool, key=lambda r: r["tot"])
     full = [r for r in pool if r["miss"] <= max(1, 0.2 * len(items))]
+    inrange = sorted(full or pool, key=lambda r: r["tot"])          # ברשימה – רק סניפים שיש בהם את רוב הסל
+    hidden = len(pool) - len(full) if full else 0
     if full: pool = full
     ranked = sorted(pool, key=lambda r: r["tot"]); best = ranked[0]
     # לא שולחים רחוק בשביל חיסכון זניח: אם סניף קרוב יותר כמעט באותו מחיר – ממליצים עליו
@@ -539,8 +540,10 @@ def compute(u):
                       + "🏪 *כל הסופרים בטווח:*\n\n" + "\n\n".join(
                 f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} *{full_name(r['s'])}*" + (" ⭐ _הקבוע שלך_" if r is reg else "") + "\n"
                 + ("      ✡️ סניף כשר\n" if is_kosher(r["s"]) else "") +
-                f"      📍 {r['s']['a']}\n      💰 ₪{r['tot']:.0f} · {ride} {round(r['min'])} דק'" + (f" _· חסרים {r['miss']}_" if r["miss"] else "")
-                for r in (inrange[:10] + ([reg] if reg and reg not in inrange[:10] else []))) + fresh,
+                f"      📍 {r['s']['a']}\n      💰 {'~' if r['miss'] else ''}₪{r['tot']:.0f} · {ride} {round(r['min'])} דק'"
+                + (f"\n      _⚠️ חסר{'ים' if r['miss'] > 1 else ''} {r['miss']} – המחיר משוער_" if r["miss"] else "")
+                for r in (inrange[:10] + ([reg] if reg and reg not in inrange[:10] else [])))
+                      + (f"\n\n_לא הצגתי {hidden} סניפים שחסרים בהם רוב המוצרים_" if hidden else "") + fresh,
             "split": split_txt}
 
 # ---------- שיחה ----------
