@@ -636,6 +636,13 @@ def handle(msg):
             send_text(to, "רשמתי אותך כמנהל הבוט 🔐 רק אתה תוכל לראות את הנתונים.")
         if to not in admins: return send_text(to, "לא הבנתי 🙂")
         return send_text(to, stats_text())
+    if text in ("אבחון מחדש", "אבחון", "איפוס", "איפוס מלא"):
+        full = text == "איפוס מלא"
+        u["prefs"] = {}; u.pop("remind_at", None); u.pop("items", None); u.pop("last", None)
+        if full: u["hist"] = []; u.pop("receipts", None); u.pop("last_receipt", None)
+        save_users()
+        send_text(to, "🔄 מתחילים את האבחון מחדש – כל השאלות מההתחלה" + (" (כולל מחיקת היסטוריית הקניות)" if full else "") + ".")
+        send_text(to, welcome(u)); return ask(to, "loc", u)
     if text == "מחק אותי":
         USERS.pop(to, None); save_users()
         return send_text(to, "מחקתי את כל המידע שלך 🗑️ כדי להתחיל מחדש כתבו היי.")
