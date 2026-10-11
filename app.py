@@ -1003,11 +1003,20 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
 
 def safe_handle(m):
+    done = threading.Event()
+    def keep_typing():   # בטלגרם "מקליד..." נעלם אחרי 5 שניות – מחדשים כל 4 שניות כל עוד עובדים
+        if done.wait(1.0): return
+        while not done.is_set():
+            typing(m["from"])
+            if done.wait(4.0): return
+    if is_tg(m["from"]): threading.Thread(target=keep_typing, daemon=True).start()
     try: handle(m)
     except Exception as ex:
         import traceback; traceback.print_exc()
         try: send_text(m["from"], "אופס, משהו השתבש אצלי 🙈 נסה שוב בעוד רגע.")
         except Exception: pass
+    finally:
+        done.set()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))

@@ -31,11 +31,15 @@ def parse_size(name):
     return v if v > 0 else None
 
 
+_SUFFIX = re.compile(r"(יות|ות|ים|ייה|יה|ה|י)$")
+_stem_cache = {}
 def stem(w):
     """גזירה גסה של רבים/נקבה בעברית: עגבניות→עגבני, ביצים→ביצ"""
-    if len(w) > 3 and not w.isdigit():
-        w = re.sub(r"(יות|ות|ים|ייה|יה|ה|י)$", "", w)
-    return w.translate(FINALS)
+    r = _stem_cache.get(w)
+    if r is None:
+        r = _SUFFIX.sub("", w) if len(w) > 3 and not w.isdigit() else w
+        r = _stem_cache[w] = r.translate(FINALS)
+    return r
 
 
 FINALS = str.maketrans("ךםןףץ", "כמנפצ")
@@ -60,6 +64,26 @@ class Data:
         for i, t in enumerate(self.itoks):
             for w in t: inv[w].append(i); sinv[stem(w)].add(i)
         self.inv = dict(inv); self.sinv = dict(sinv); self.vocab = [w for w in self.inv if not w.isdigit()]
+        # אינדקס תחיליות: "חל" -> [חלב, חלבון, ...] (במקום לסרוק את כל אוצר המילים בכל חיפוש)
+        pre = defaultdict(list)
+        for t in self.vocab:
+            for k in range(2, len(t)): pre[t[:k]].append(t)
+        self.pre = dict(pre); self.vset = set(self.vocab)
+        self._meta = {}
+
+    def meta(self, i):
+        """(המילה הראשונה אחרי גזירה, קבוצת המילים אחרי גזירה) – מחושב פעם אחת לכל מוצר"""
+        m = self._meta.get(i)
+        if m is None:
+            t = toks(self.items[i][1])
+            m = self._meta[i] = (stem(t[0]) if t else "", frozenset(stem(x) for x in t), len(t), [stem(x) for x in t])
+        return m
+
+    def warm(self):
+        """מחשב מראש את נתוני החיפוש לכל המוצרים (ברקע), כדי שהחישוב הראשון למשתמש יהיה מהיר"""
+        t0 = time.time()
+        for i in range(len(self.items)): self.meta(i)
+        print(f"warm-up: {time.time() - t0:.1f}s", flush=True)
 
     def prices(self, blob_no):
         """מילון: אינדקס מוצר -> מחיר בש"ח, לבלוק (סניף) נתון"""
@@ -107,10 +131,9 @@ class Data:
         out = [i]
         for j in self.search(query or self.items[i][1], 80):
             if j == i or not self.items[j][0][:1].isdigit(): continue
-            t = [stem(w) for w in toks(self.items[j][1])]
-            ts = set(t)
+            mj = self.meta(j); t = mj[3]; ts = mj[1]
             if not all(w in ts or any(x.startswith(w) for x in ts) for w in q): continue   # כל מילות החיפוש (כולל מותג אם נכתב)
-            if not t or t[0] != q[0] and stem(toks(self.items[i][1])[0]) != t[0]: continue  # אותו סוג מוצר (המילה הראשונה)
+            if not t or t[0] != q[0] and self.meta(i)[0] != t[0]: continue  # אותו סוג מוצר (המילה הראשונה)
             s1 = self.size(j)
             if s0 is None or s1 is None:
                 if s0 != s1: continue
@@ -124,27 +147,29 @@ class Data:
         q = toks(name)
         if not q: return []
         score = defaultdict(float)
+        qs = [stem(w) for w in q]; q0 = qs[0]
         for w in q:
             hit = {}
             for i in self.inv.get(w, ()): hit[i] = 2
             for i in self.sinv.get(stem(w), ()):
                 if i not in hit: hit[i] = 1.6
             if len(w) >= 2 and not w.isdigit():
-                for t in self.vocab:
-                    if t != w and (t.startswith(w) or (len(t) >= 3 and w.startswith(t))):
-                        for i in self.inv[t]:
-                            if i not in hit: hit[i] = 1
+                near = set(self.pre.get(w, ()))
+                near.update(w[:k] for k in range(3, len(w)) if w[:k] in self.vset)
+                near.discard(w)
+                for t in near:
+                    for i in self.inv[t]:
+                        if i not in hit: hit[i] = 1
             for i, s in hit.items(): score[i] += s
         out = []
         for i, s in score.items():
             it = self.items[i]
             if not it[0][0].isdigit() and len(q) <= 3: s += 1
-            first = toks(it[1])[:1]
+            f0, st, _, _ = self.meta(i)
             canon = False
-            if first and stem(first[0]) == stem(q[0]):
+            if f0 and f0 == q0:
                 s += 0.6   # "אורז בסמטי" לפני "קובה אורז"
-                st = {stem(x) for x in self.itoks[i]}
-                canon = all(w in self.itoks[i] or stem(w) in st for w in q)
+                canon = all(w in self.itoks[i] or sw in st for w, sw in zip(q, qs))
             sc = s / (len(q) + 0.3 * len(self.itoks[i])) + 0.35 * it[2] / self.max_avail
             if canon:   # בקשה כללית ("במבה") – המוצר הנפוץ ביותר מהסוג הזה
                 sc += 0.5 + 3.0 * it[2] / self.max_avail
@@ -234,6 +259,7 @@ def load(force_download=True):
             t0 = time.time(); _download()
             nd = _from_bin(CACHE_FILE)
             if D is None or nd.version != D.version:
+                threading.Thread(target=nd.warm, daemon=True).start()
                 D = nd; print(f"נתונים: {len(D.stores)} סניפים, {len(D.items)} מוצרים, גרסה {D.version} ({time.time() - t0:.1f}s)", flush=True)
             return D
         except Exception as ex:
