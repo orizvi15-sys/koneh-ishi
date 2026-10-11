@@ -70,6 +70,27 @@ def nominatim_struct(street, city):
     return None
 
 
+GKEY = os.environ.get("GOOGLE_MAPS_KEY", "")
+GOOD_TYPES = {"street_address", "premise", "subpremise", "establishment", "point_of_interest", "store", "supermarket",
+              "grocery_or_supermarket", "shopping_mall", "route", "intersection"}
+
+
+def google(q):
+    """Google Geocoding – רק תוצאה מדויקת (כתובת/מקום), לא מרכז עיר"""
+    url = "https://maps.googleapis.com/maps/api/geocode/json?" + urllib.parse.urlencode(
+        {"address": q, "region": "il", "language": "he", "components": "country:IL", "key": GKEY})
+    try:
+        r = json.load(urllib.request.urlopen(url, timeout=30))
+        if r.get("status") not in ("OK", "ZERO_RESULTS"): print("google:", r.get("status"), r.get("error_message", "")[:200])
+        for x in r.get("results", [])[:1]:
+            if not GOOD_TYPES & set(x.get("types", [])) or x.get("partial_match") and "route" in x.get("types", []): return None
+            loc = x["geometry"]["location"]; lat, lng = loc["lat"], loc["lng"]
+            if 29.3 < lat < 33.5 and 34.2 < lng < 35.95: return [lat, lng]
+    except Exception as ex:
+        print("google error", q, ex)
+    return None
+
+
 def clean_addr(a):
     a = re.sub(r"\b(רח'?|רחוב|שד'?|שדרות|שד\.)\s+", "", a or "")
     a = re.sub(r"\s*(,|-)?\s*(מרכז מסחרי|קניון|מתחם|א\.?ת\.?|אזור התעשייה|אזור תעשייה|פינת).*$", "", a)
@@ -156,6 +177,18 @@ def main():
         if not p and s["name"]: p = geocode(f"{s['name']}"); prec = "name"
         geo[ck] = [p, prec] if p else None
         if p: s["p"], s["prec"] = p, prec
+    # ---- Google: שיפור סניפים שמיקומם רק ברמת עיר/שם (פעם אחת לכל סניף, נשמר במטמון) ----
+    if GKEY:
+        gdone = geo.setdefault("_g", {}); used = 0
+        for k, s in stores.items():
+            if s.get("prec") in ("address", "manual", "google") and s.get("p") or used >= 1500: continue
+            c = s["city"]; ck = f"{s['chain']}|{s['name']}|{s['addr']}|{c}"
+            if ck in gdone: continue
+            gdone[ck] = 1; addr = clean_addr(s["addr"]); p = None
+            if addr and c: p = google(f"{addr}, {c}"); used += 1
+            if not p and s["name"]: p = google(f"{s['chain']} {s['name']}" + (f", {c}" if c else "")); used += 1
+            if p: s["p"], s["prec"] = p, "google"; geo[ck] = [p, "google"]
+        print("google geocoding queries:", used)
     json.dump(geo, open(a.geocache, "w", encoding="utf-8"), ensure_ascii=False)
     located = {k: s for k, s in stores.items() if s.get("p")}
     print("located", len(located), "of", len(stores), "geocode queries used", a.max_geocode - q_left)
