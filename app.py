@@ -496,6 +496,8 @@ def stats_text():
          f"🧾 קבלות שנסרקו: היום {sum(t > day for t in rec)} · השבוע *{sum(t > wk for t in rec)}* · סה\"כ {len(rec)}",
          f"⏰ תזכורות פעילות: {sum(1 for u in us.values() if u.get('remind_at') and not u.get('prefs', {}).get('remind_off'))}"]
     if clubs: L.append("💳 מועדונים: " + ", ".join(f"{c} {n}" for c, n in sorted(clubs.items(), key=lambda x: -x[1])))
+    iss = watchdog_issues()
+    L += ["", "🛡️ " + ("הכל תקין" if not iss else f"{len(iss)} התראות:")] + iss
     if D:
         L += ["", f"📦 נתונים: {len(D.stores):,} סניפים · {len(D.items):,} מוצרים",
               f"🕐 עודכנו: {D.built[8:10]}/{D.built[5:7]} {D.built[11:16]}" if len(D.built) >= 16 else f"🕐 גרסה: {D.version} ({D.source})"]
@@ -524,9 +526,55 @@ def send_reminder(to, u):
     send_buttons(to, f"היי{' ' + name if name else ''} 👋\nבדרך כלל אתה עושה קנייה בערך בזמן הזה.\n"
                      f"רוצה שאבדוק איפה הכי משתלם השבוע?", btns)
 
+# ---------- שומר לילה: התראה למנהל כשמשהו בנתונים נשבר ----------
+MAJOR = {"SHUFERSAL": "שופרסל", "RAMI_LEVY": "רמי לוי", "YOHANANOF": "יוחננוף", "OSHER_AD": "אושר עד",
+         "TIV_TAAM": "טיב טעם", "YAYNO_BITAN_AND_CARREFOUR": "קרפור", "VICTORY_NEW_SOURCE": "ויקטורי", "HAZI_HINAM": "חצי חינם"}
+_watch = {"t": 0}
+
+def _iso_age_h(iso):
+    try: return (time.time() - _dt.fromisoformat(iso).timestamp()) / 3600
+    except Exception: return None
+
+def admins():
+    meta = USERS.get("_meta", {})
+    return set(filter(None, os.environ.get("ADMIN_CHAT", "").split(","))) | set(meta.get("admins", []))
+
+def watchdog_issues():
+    D = kdata.D; meta = USERS.setdefault("_meta", {}); seen = meta.setdefault("seen", {}); out = []
+    if not D or D.source != "remote":
+        return ["⚠️ הבוט עובד על נתוני גיבוי (13 סניפים) – הקובץ הארצי לא נטען"] if D else []
+    age = _iso_age_h(D.built)
+    if age is not None and age > 9: out.append(f"⚠️ הנתונים לא התעדכנו כבר {age:.0f} שעות (מאז {D.built[11:16]} {D.built[8:10]}/{D.built[5:7]})")
+    for ch, he in MAJOR.items():
+        info = D.chains.get(ch)
+        if not info:
+            if seen.get(ch): out.append(f"⚠️ {he} נעלמה מהנתונים (היו {seen[ch]} סניפים)")
+            continue
+        a = _iso_age_h(info.get("fetched", ""))
+        if a is not None and a > 12: out.append(f"⚠️ {he} לא התעדכנה כבר {a:.0f} שעות")
+        n = info.get("stores", 0)
+        if seen.get(ch) and n < 0.5 * seen[ch]: out.append(f"⚠️ {he} ירדה מ-{seen[ch]} ל-{n} סניפים")
+        elif n: seen[ch] = max(n, int(seen.get(ch, 0) * 0.9))
+    return out
+
+def watchdog():
+    if time.time() - _watch["t"] < 1800: return
+    _watch["t"] = time.time()
+    ad = [a for a in admins() if is_tg(a)]
+    if not ad: return
+    meta = USERS.setdefault("_meta", {}); sent = meta.setdefault("alerts", {})
+    new = [i for i in watchdog_issues() if time.time() - sent.get(i, 0) > 12 * 3600]   # כל תקלה – פעם ב-12 שעות לכל היותר
+    if not new: return
+    for a in ad: send_text(a, "🛡️ *שומר לילה – קונה אישי*\n\n" + "\n".join(new))
+    for i in new: sent[i] = time.time()
+    for k in [k for k, t in sent.items() if time.time() - t > 3 * 86400]: sent.pop(k)
+    save_users()
+
 def _reminder_loop():
     while True:
         time.sleep(60)
+        try: watchdog()
+        except Exception as ex: print("watchdog error", ex, flush=True)
         now = time.time()
         for to, u in list(USERS.items()):
             try:

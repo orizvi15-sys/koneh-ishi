@@ -47,6 +47,7 @@ class Data:
     def __init__(self, items, stores, version, built, blob_reader, source):
         self.items, self.stores, self.version, self.built, self.source = items, stores, version, built, source
         self._blob = blob_reader
+        self.chains = {}
         self.code2i = {it[0]: i for i, it in enumerate(items)}
         self.name2i = {}
         for i, it in enumerate(items): self.name2i.setdefault(it[1], i)
@@ -188,7 +189,9 @@ def _from_bin(path):
         n, a = _display(chain, name, addr, city)
         stores.append({"key": key, "chain": chain, "n": n, "a": a, "p": [lat, lng], "blob": blob, "ts": ts, "prec": prec,
                        "cblob": cblob, "pblob": pblob})
-    return Data(h["items"], stores, h["v"], h.get("built", ""), reader, "remote")
+    D_ = Data(h["items"], stores, h["v"], h.get("built", ""), reader, "remote")
+    D_.chains = h.get("chains", {})
+    return D_
 
 
 def _from_local():
