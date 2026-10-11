@@ -132,6 +132,29 @@ def dist_km(a, b):
     return 12742 * math.asin(math.sqrt(h))
 
 
+def google_places(q):
+    """Google Places (New) Text Search – מיקום לפי שם העסק. מחזיר ([lat,lng] או None, שגיאה)"""
+    req = urllib.request.Request("https://places.googleapis.com/v1/places:searchText",
+        data=json.dumps({"textQuery": q, "regionCode": "IL", "languageCode": "he", "pageSize": 1}).encode(),
+        headers={"Content-Type": "application/json", "X-Goog-Api-Key": GKEY,
+                 "X-Goog-FieldMask": "places.location,places.displayName,places.types"})
+    try:
+        r = json.load(urllib.request.urlopen(req, timeout=30))
+        for x in r.get("places", [])[:1]:
+            if not set(x.get("types", [])) & {"supermarket", "grocery_store", "store", "convenience_store", "gas_station",
+                                               "food_store", "shopping_mall", "establishment", "point_of_interest", "drugstore", "market"}:
+                return None, None
+            loc = x["location"]; lat, lng = loc["latitude"], loc["longitude"]
+            if 29.3 < lat < 33.5 and 34.2 < lng < 35.95: return [lat, lng], None
+        return None, None
+    except urllib.error.HTTPError as e:
+        body = e.read()[:300]
+        if e.code in (403, 401) or b"PERMISSION_DENIED" in body or b"SERVICE_DISABLED" in body: return None, "denied"
+        print("places error", e.code, body); return None, "err"
+    except Exception as ex:
+        print("places error", ex); return None, "err"
+
+
 def clean_addr(a):
     a = re.sub(r"\b(רח'?|רחוב|שד'?|שדרות|שד\.)\s+", "", a or "")
     a = re.sub(r"\s*(,|-)?\s*(מרכז מסחרי|קניון|מתחם|א\.?ת\.?|אזור התעשייה|אזור תעשייה|פינת).*$", "", a)
@@ -265,6 +288,19 @@ def main():
             if not p and s["name"]: p = google(f"{s['chain']} {s['name']}" + (f", {c}" if c else "")); used += 1
             if p: s["p"], s["prec"] = p, "google"; geo[ck] = [p, "google"]
         print("google geocoding queries:", used)
+        # ---- Google Places: סניפים שעדיין לא מדויקים – חיפוש לפי שם העסק ("רמי לוי אופקים") ----
+        pdone = geo.setdefault("_places", {}); pused = 0
+        for k, s in stores.items():
+            if s.get("prec") in ("address", "manual", "google", "places") and s.get("p") or pused >= 400: continue
+            c = s["city"]; ck = f"{s['chain']}|{s['name']}|{s['addr']}|{c}"
+            if ck in pdone: continue
+            q = f"{s['chain']} {s['name'] if s['chain'] not in s['name'] else s['name'].replace(s['chain'], '').strip()}" + (f" {c}" if c and c not in s["name"] else "")
+            p, err = google_places(q); pused += 1
+            if err == "denied": print("google places: API not enabled for this key – skipping"); break
+            pdone[ck] = 1
+            if p and (not s.get("p") or dist_km(p, s["p"]) < 25):        # רק אם זה באותו אזור (לא סניף אחר באותו שם בעיר אחרת)
+                s["p"], s["prec"] = p, "places"; geo[ck] = [p, "places"]
+        print("google places queries:", pused)
     json.dump(geo, open(a.geocache, "w", encoding="utf-8"), ensure_ascii=False)
     located = {k: s for k, s in stores.items() if s.get("p")}
     print("located", len(located), "of", len(stores), "geocode queries used", a.max_geocode - q_left)
