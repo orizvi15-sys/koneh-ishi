@@ -361,6 +361,10 @@ def parse_list(text):
         if mx:
             out.append({"name": s[:mx.start()].strip(), "qty": float(mx.group(1))}); continue
         if not re.search(r"[א-תA-Za-z]", s): continue
+        mu = re.match(r'^(חצי|רבע)?\s*(קילו|ק"ג|קג)\s+(.+)$', s)                 # "קילו חזה עוף", "חצי קילו טחון"
+        if mu: out.append({"name": mu.group(3), "qty": {"חצי": .5, "רבע": .25}.get(mu.group(1), 1.0)}); continue
+        mg = re.match(r'^(\d+)\s*(גרם|גר|ג\')\s+(.+)$', s)                      # "300 גרם פרגיות"
+        if mg and int(mg.group(1)) >= 50: out.append({"name": mg.group(3), "qty": int(mg.group(1)) / 1000}); continue
         m = re.match(r'^(\d+(?:\.\d+)?)\s*(ק"ג|קג|קילו)?\s+(.+)$', s) or re.match(r'^(.+?)\s+(\d+(?:\.\d+)?)\s*(ק"ג|קג|קילו)?$', s)
         if not m: out.append({"name": s, "qty": 1})
         elif m.group(1)[0].isdigit(): out.append({"name": m.group(3), "qty": float(m.group(1))})
@@ -505,7 +509,8 @@ def compute(u):
     if gone: det.append("\n_לא נמצאו במאגר: " + ", ".join(gone) + "_")
     if car and best["fuel"] >= 1: det.append(f"\n⛽ דלק הלוך-חזור: ₪{best['fuel']:.0f}")
     fresh = f"\n\n_מחירים ומבצעים מעודכנים ל-{D.built[8:10]}/{D.built[5:7]} {D.built[11:16]}_" if len(D.built) >= 16 else ""
-    return {"main": "\n".join(L),
+    saved = 0 if stay else (gap if reg else (avg - best["tot"] if avg else 0))
+    return {"main": "\n".join(L), "store": s["n"], "saved": max(0, round(saved)),
             "nav": f"https://waze.com/ul?ll={s['p'][0]},{s['p'][1]}&navigate=yes",
             "details": f"📋 *הסל שלך ב{s['n']}:*\n" + "\n".join(det) + fresh,
             "others": (f"💡 אם מתחלקים בין *{split['A']['s']['n']}* ל*{split['B']['s']['n']}* חוסכים עוד *₪{best['tot'] - split['tot']:.0f}*\n\n" if split_txt else "")
@@ -551,7 +556,7 @@ def finish(to, u, redo=False):
     if isinstance(res, list):
         for m in res: send_text(to, m)
     else:
-        u["last"] = {k: res[k] for k in ("details", "others", "split")}
+        u["last"] = {k: res[k] for k in ("details", "others", "split", "store")}
         n, miss = len(u["items"]), len(u.get("missed") or [])
         main = res["main"] + f"\n🧾 זיהיתי {n} מוצרים" + (f" ({miss} לא נמצאו)" if miss else "")
         if u.get("note"): main += "\n\n" + u.pop("note")
@@ -712,6 +717,95 @@ def understood_text(u, missed=()):
     if len(u["items"]) > 25: L.append(f"…ועוד {len(u['items']) - 25}")
     if missed: L.append("\n❓ לא מצאתי: " + ", ".join(missed[:8]))
     return "\n".join(L)
+
+# ---------- הבנת טקסט חופשי ----------
+UNDERSTAND = """You parse messages for "קונה אישי", an Israeli Telegram bot that compares supermarket basket prices near the user.
+User message (Hebrew): <<{text}>>
+Current basket: {basket}
+Last recommended store: {store}
+Reply with ONLY a JSON object: {{"intent": "...", "items": [{{"name": "...", "qty": 1}}], "reply": ""}}
+intent is one of:
+ "list"   – a shopping list / products to compare (a new basket). One product with a quantity ("קילו חזה עוף") is also a list.
+ "add"    – add products to the CURRENT basket ("תוסיף במבה", "גם חלב").
+ "remove" – remove products from the current basket ("תוריד את הקולה", "בלי ביצים").
+ "price"  – asks the price of ONE product or where it is cheapest ("כמה עולה קוטג'?", "איפה הכי זול חלב").
+ "chat"   – anything else: thanks, greetings, choosing a store ("נלך על רמי לוי"), questions about the bot.
+items: product names in Hebrew as the user wrote them, WITHOUT quantity words; qty = units, but for meat/chicken/fish/produce
+sold by weight qty is kilograms ("קילו"=1, "חצי קילו"=0.5, "300 גרם"=0.3, "2 קילו"=2). Empty list for chat.
+reply: only for chat – a short warm Hebrew reply (max 2 short sentences), e.g. wish good shopping if they chose a store,
+or explain they can send a list, a receipt photo or ask "כמה עולה X". Never invent prices."""
+
+
+def understand(text, u):
+    basket = ", ".join(x["name"] for x in (u.get("items") or [])[:40]) or "none"
+    store = ((u.get("last") or {}).get("store")) or "none"
+    r = claude_json(UNDERSTAND.format(text=text[:1500], basket=basket, store=store), keep_dict=True)
+    if not isinstance(r, dict) or r.get("intent") not in ("list", "add", "remove", "price", "chat"): return None
+    its = []
+    for x in r.get("items") or []:
+        if not isinstance(x, dict) or not str(x.get("name", "")).strip(): continue
+        try: q = float(x.get("qty") or 1)
+        except Exception: q = 1
+        its.append({"name": str(x["name"]).strip(), "qty": q if 0 < q < 100 else 1})
+    r["items"] = its
+    print("understood:", r["intent"], [i["name"] for i in its], flush=True)
+    return r
+
+
+def act_on(to, u, r):
+    intent, its = r["intent"], r["items"]
+    if intent in ("add", "remove") and not u.get("items"): intent = "list" if intent == "add" else "chat"
+    if intent != "chat" and not its: intent = "chat"
+    if intent == "chat":
+        rep = str(r.get("reply") or "").strip()[:300] or "אפשר לשלוח רשימת קניות, צילום קבלה, או לשאול *כמה עולה* מוצר 🙂"
+        return send_text(to, rep)
+    if intent == "list":
+        return got_items(to, u, its)
+    if intent == "price":
+        return price_answer(to, u, its[0])
+    if intent == "add":
+        found, missed = match_items(its)
+        if not found: return send_text(to, "לא מצאתי את זה במאגר 🙁 נסו לכתוב קצת אחרת.")
+        u["items"] += [{k: x[k] for k in ("src", "code", "name", "qty", "c")} for x in found]
+        u["note"] = "➕ הוספתי: " + ", ".join(x["name"] for x in found) + (f"\n(לא מצאתי: {', '.join(missed)})" if missed else "")
+        return finish(to, u, redo=True)
+    # remove
+    gone = []
+    for x in its:
+        w = {kdata.stem(t) for t in kdata.toks(x["name"])}
+        best = max(u["items"], key=lambda it: len(w & {kdata.stem(t) for t in kdata.toks(it.get("src", "") + " " + it["name"])}), default=None)
+        if best and w & {kdata.stem(t) for t in kdata.toks(best.get("src", "") + " " + best["name"])}:
+            u["items"].remove(best); gone.append(best["name"])
+    if not gone: return send_text(to, "לא מצאתי את זה בסל 🤔 אפשר ללחוץ *🧾 מה זיהיתי* ולתקן משם.")
+    if not u["items"]: save_users(); return send_text(to, "הסל ריק עכשיו 🙂 אפשר לכתוב רשימה חדשה.")
+    u["note"] = "➖ הורדתי: " + ", ".join(gone)
+    return finish(to, u, redo=True)
+
+
+def price_answer(to, u, item):
+    """שאלה על מוצר אחד: איפה הכי זול באזור (לפי המיקום וטווח הנסיעה מהאבחון)"""
+    found, _ = match_items([item])
+    if not found: return send_text(to, f"לא מצאתי את *{item['name']}* במאגר 🙁 נסו לכתוב קצת אחרת.")
+    x = found[0]; D = kdata.D; i = resolve(D, x)
+    pr = u["prefs"]; home = pr["home"]; clubs = set(pr.get("clubs") or [])
+    g = D.group(i, x.get("src") or x["name"])
+    rows = []
+    for s in sorted(D.stores, key=lambda s: km(home, s["p"]))[:MAX_POOL * 2]:
+        d1 = km(home, s["p"]); mn = d1 / CAR_KMH * 60 + PARK_MIN if pr["mode"] == "car" else (d1 / BUS_KMH * 60 + BUS_WAIT if pr["mode"] == "bus" else d1 / WALK_KMH * 60)
+        if rows and mn > pr["maxMin"]: break
+        p = gp(D.store_prices(s, clubs), dict(x, i=i, g=g))
+        if p is not None: rows.append((p, d1, s))
+        if len(rows) >= MAX_POOL: break
+    if not rows: return send_text(to, f"לא מצאתי את *{D.items[i][1]}* בסופרים באזור שלך 🙁")
+    rows.sort(key=lambda r: r[0]); kg = 'לק"ג' in D.items[i][1]
+    unit = " לק\"ג" if kg else ""
+    L = [f"💰 *{D.items[i][1]}* – באזור שלך:", ""]
+    for k, (p, d1, s) in enumerate(rows[:5]):
+        L.append(f"{'🏆' if k == 0 else '▫️'} {s['n']} – *₪{p:.2f}*{unit} · {d1:.1f} ק\"מ")
+    if len(rows) > 1 and rows[-1][0] - rows[0][0] >= 0.5:
+        L.append(f"\n✅ הפרש של עד ₪{rows[-1][0] - rows[0][0]:.2f} בין הסופרים באזור")
+    return send_text(to, "\n".join(L))
+
 
 def got_receipt(to, u, img, mime):
     pr = u["prefs"]
@@ -926,6 +1020,9 @@ def handle(msg):
     if text:
         if not all(k in pr for k in PROFILE_KEYS):
             return send_text(to, "בוא נסיים קודם את השאלות 🙂 אפשר ללחוץ על הכפתורים למעלה.")
+        if CLAUDE_KEY and not (text.count("\n") >= 3 or re.search(r"\d+\.\d{2}", text)):
+            r = understand(text, u)
+            if r: return act_on(to, u, r)
         items = None
         if CLAUDE_KEY and (text.count("\n") >= 3 or re.search(r"\d+\.\d{2}", text)):
             items = extract_items(text=text)  # רשימה ארוכה / קבלה מועתקת – Claude מסדר אותה
