@@ -780,7 +780,7 @@ def understood_text(u, missed=()):
     L = [f"🧾 *זיהיתי {len(u['items'])} מוצרים*" + (f" – מחירים ב{last['store']}:" if ip and last.get("store") else ":"), ""]
     tot = 0
     def toks(t): return {kdata.stem(w) for w in kdata.toks(t)}
-    for x in u["items"][:45]:
+    for x in u["items"]:
         kg = 'לק"ג' in x["name"]
         q = (f" ×{x['qty']:g} ק\"ג" if kg else f" ×{x['qty']:g}") if x["qty"] != 1 else ""
         nm = x["name"].replace(' (לק"ג)', "")
@@ -791,7 +791,6 @@ def understood_text(u, missed=()):
         price = ("" if not pr else " – ❌ _חסר בסניף_" if pr[1] else f" – ₪{pr[0]:.2f}")
         if pr and not pr[1]: tot += pr[0]
         L.append(f"• {nm}{q}{price}{alt}")
-    if len(u["items"]) > 45: L.append(f"…ועוד {len(u['items']) - 45}")
     if tot: L.append(f"\n💰 *סה\"כ: ₪{tot:.2f}*")
     if missed: L.append("\n❓ לא מצאתי: " + ", ".join(missed[:8]))
     return "\n".join(L)
@@ -1114,7 +1113,13 @@ def handle(msg):
         return finish(to, u, redo=True)
     if reply == "seen":
         if not u.get("items"): return send_text(to, "אין כרגע סל – כתבו *היי* כדי להתחיל 🙂")
-        return send_buttons(to, understood_text(u, u.get("missed") or []), [("fix", "✏️ משהו לא נכון")])
+        txt = understood_text(u, u.get("missed") or [])
+        parts = [""]                                   # סל גדול – מפצלים להודעות של עד ~3500 תווים (מגבלת טלגרם)
+        for line in txt.split("\n"):
+            if len(parts[-1]) + len(line) > 3500: parts.append("")
+            parts[-1] += line + "\n"
+        for ptxt in parts[:-1]: send_text(to, ptxt.rstrip())
+        return send_buttons(to, parts[-1].rstrip(), [("fix", "✏️ משהו לא נכון")])
     if reply == "fixdone":
         return send_text(to, "מעולה 👍")
     if reply in ("det", "oth", "spl"):
