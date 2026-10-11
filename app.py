@@ -146,7 +146,9 @@ def graph_post(path, payload):
         print("Graph error", e.code, e.read()[:500]); return {}
 
 M_NEW, M_CAM, M_SET = "🛒 קנייה חדשה", "📷 צילום קבלה", "⚙️ הגדרות"
-MENU = {"keyboard": [[{"text": M_NEW}, {"text": M_CAM}], [{"text": M_SET}]], "resize_keyboard": True, "is_persistent": True}
+# מקלדת קבועה אחת לכל השיחה – כולל כפתור מיקום (שימושי גם לעדכון מיקום בכל רגע)
+MENU = {"keyboard": [[{"text": "📍 שליחת המיקום שלי", "request_location": True}], [{"text": M_NEW}, {"text": M_CAM}], [{"text": M_SET}]],
+        "resize_keyboard": True, "is_persistent": True}
 
 def send_text(to, text, menu=False):
     if is_tg(to):
@@ -175,8 +177,7 @@ def send_buttons(to, text, buttons):  # buttons: [(id, title<=20)] up to 3
 def send_location_request(to, text):
     if is_tg(to):
         return tg_call("sendMessage", {"chat_id": to[3:], "text": tg_html(text), "parse_mode": "HTML",
-                        "reply_markup": {"keyboard": [[{"text": "📍 שליחת המיקום שלי", "request_location": True}]],
-                                         "resize_keyboard": True, "one_time_keyboard": True}})
+                        "reply_markup": MENU})
     graph_post(f"{PHONE_ID}/messages", {"messaging_product": "whatsapp", "to": to, "type": "interactive",
         "interactive": {"type": "location_request_message", "body": {"text": text},
                         "action": {"name": "send_location"}}})
@@ -677,8 +678,7 @@ def handle(msg):
         pr["brand"] = reply[1:]; return ask(to, "kosher", u)
     if reply in ("kreg", "kmeh") and u["step"] == "kosher":
         pr["kosher"] = reply[1:]; pr.setdefault("splitMin", SPLIT_MIN); pr.pop("remind_off", None)
-        send_text(to, "מעולה, סיימנו 🎉\nלמטה יש לך כפתורים קבועים – קנייה חדשה, צילום קבלה והגדרות 👇", menu=True)
-        return ask(to, "basket", u)
+        return ask(to, "basket", u, intro="מעולה, סיימנו 🎉\n\n")
     if reply in ("s0", "s30", "sno"): pr["splitMin"] = {"s0": SPLIT_MIN, "s30": SPLIT_MIN, "sno": -1}[reply]; return ask(to, "basket", u)
     if reply and reply.startswith("club:"):
         c = reply[5:]
