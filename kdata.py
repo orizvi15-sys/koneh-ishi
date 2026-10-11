@@ -45,6 +45,12 @@ def stem(w):
 FINALS = str.maketrans("ךםןףץ", "כמנפצ")
 
 
+class Prices(dict):
+    """מילון מחירים של סניף + מבצעי כמות"""
+    def __init__(self, *a):
+        super().__init__(*a); self.deals = {}
+
+
 class Data:
     """items[i] = [code, name, avail, median_agorot]; stores[j] = dict(key, chain, n, a, p, blob, ts)"""
 
@@ -97,17 +103,24 @@ class Data:
         return m
 
     def store_prices(self, store, clubs=()):
-        """מחירי הסניף לרגע זה: מחיר רגיל + מבצעים שעדיין בתוקף (ולחבר מועדון של הרשת – גם מבצעי מועדון)"""
-        P = self.prices(store["blob"])
-        layers = []
+        """מחירי הסניף לרגע זה: מחיר רגיל + מבצעים שעדיין בתוקף (ולחבר מועדון של הרשת – גם מבצעי מועדון).
+        מבצעי כמות ("3 ב-10") לא נכנסים למחיר היחידה – הם ב-P.deals = {אינדקס: (מחיר ליחידה, כמות מינימלית)}"""
+        base = self.prices(store["blob"])
+        layers, mlayers = [], []
         if store.get("pblob", -1) >= 0: layers.append(self.prices(store["pblob"]))
         if store.get("cblob", -1) >= 0 and store["chain"] in clubs: layers.append(self.prices(store["cblob"]))
-        if not layers: return P
-        now = int(time.time() // 60); P = dict(P)
+        if store.get("mblob", -1) >= 0: mlayers.append(self.prices(store["mblob"]))
+        if store.get("cmblob", -1) >= 0 and store["chain"] in clubs: mlayers.append(self.prices(store["cmblob"]))
+        P = Prices(base); now = int(time.time() // 60)
         for L in layers:
             for i, v in L.items():
-                p, end = v if isinstance(v, tuple) else (v, 2 ** 32)
+                p, end = (v[0], v[1]) if isinstance(v, tuple) else (v, 2 ** 32)
                 if end >= now and p < P.get(i, 1e9): P[i] = p
+        for L in mlayers:
+            for i, v in L.items():
+                p, end, q = v if len(v) == 3 else (v[0], v[1], 1)
+                if end >= now and q > 1 and p < P.get(i, 1e9) - 0.009 and (i not in P.deals or p < P.deals[i][0]):
+                    P.deals[i] = (p, q)
         return P
 
     def price(self, store, i):
@@ -199,12 +212,17 @@ def _from_bin(path):
         n = struct.unpack("<I", raw[:4])[0]
         d = array.array("H"); d.frombytes(raw[4:4 + 2 * n])
         p = array.array("I"); p.frombytes(raw[4 + 2 * n:4 + 6 * n])
-        ends = None
+        ends = qs = None
         if len(raw) >= 4 + 10 * n and n:          # שכבת מבצעים – עם תוקף
             ends = array.array("I"); ends.frombytes(raw[4 + 6 * n:4 + 10 * n])
+        if len(raw) >= 4 + 12 * n and n:          # מבצעי כמות – גם כמות מינימלית
+            qs = array.array("H"); qs.frombytes(raw[4 + 10 * n:4 + 12 * n])
         out = {}; i = 0
         for k in range(n):
-            i += d[k]; out[i] = (p[k] / 100, ends[k]) if ends is not None else p[k] / 100
+            i += d[k]
+            if qs is not None: out[i] = (p[k] / 100, ends[k], qs[k])
+            elif ends is not None: out[i] = (p[k] / 100, ends[k])
+            else: out[i] = p[k] / 100
         return out
 
     stores = []
@@ -213,10 +231,12 @@ def _from_bin(path):
         key, chain, name, addr, city, lat, lng, blob, ts, prec = row[:10]
         cblob = row[10] if len(row) > 10 else -1
         pblob = row[11] if len(row) > 11 else -1
+        mblob = row[12] if len(row) > 12 else -1
+        cmblob = row[13] if len(row) > 13 else -1
         if key in STORE_FIX: lat, lng = STORE_FIX[key]
         n, a = _display(chain, name, addr, city)
         stores.append({"key": key, "chain": chain, "n": n, "a": a, "p": [lat, lng], "blob": blob, "ts": ts, "prec": prec,
-                       "cblob": cblob, "pblob": pblob})
+                       "cblob": cblob, "pblob": pblob, "mblob": mblob, "cmblob": cmblob})
     D_ = Data(h["items"], stores, h["v"], h.get("built", ""), reader, "remote")
     D_.chains = h.get("chains", {})
     return D_

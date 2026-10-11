@@ -246,16 +246,21 @@ def apply_promos(root, items, now):
             reg = it["price"]
             dp = num(kid(pi, "discountedprice") or (deep(pr, "discountedprice") if pi is not pr else ""))
             mq = num(kid(pi, "minqty") or (deep(pr, "minqty") if pi is not pr else "")) or 1
-            cands = []
+            cands = []                                   # (מחיר ליחידה, כמות מינימלית לקבלת המבצע)
             if m and not it["w"]:
                 k = int(m.group(1)); P = float(m.group(2))
-                if 1 < k <= 10: cands.append(P / k)
+                if 1 < k <= 10: cands.append((P / k, k))
             if dp and dp > 0:
-                if mq >= 1: cands.append(dp / mq)
-                cands.append(dp)
-            for u in cands:
+                q = int(mq) if mq and mq >= 1 and float(mq).is_integer() and not it["w"] else 1
+                if q > 1: cands.append((dp / q, q))
+                cands.append((dp, q if q > 1 and not m else 1))
+            for u, q in cands:
                 if 0.3 * reg <= u < reg - 0.009:
-                    if u < it.get(key, reg): it[key] = round(u, 2); it[key + "_end"] = end_min; n += 1
+                    if q <= 1:                                # מבצע רגיל – לכל יחידה
+                        if u < it.get(key, reg): it[key] = round(u, 2); it[key + "_end"] = end_min; n += 1
+                    else:                                     # מבצע כמות ("3 ב-10") – רק כשקונים לפחות q
+                        old = it.get(key + "_m")
+                        if not old or u < old[0]: it[key + "_m"] = [round(u, 2), end_min, q]; n += 1
                     break
     return n
 
@@ -293,16 +298,18 @@ def build_chain(files, chain, cities, now=None):
         except Exception as ex:
             print("promo parse error", f, ex)
 
-    names, prices, promo, club = {}, {}, {}, {}
+    names, prices, promo, club, promo_m, club_m = {}, {}, {}, {}, {}, {}
     meat_seen = set(); wdisp = {}; mnames = {}
     for key, items in per_store.items():
-        row, prow, crow = {}, {}, {}
+        row, prow, crow, pmrow, cmrow = {}, {}, {}, {}, {}
         for code, it in items.items():
             if is_barcode(code, it):
                 row[code] = it["price"]                                   # מחיר רגיל
                 if it.get("best") is not None: prow[code] = [it["best"], it["best_end"]]   # מבצע + תוקף
                 c = it.get("club")
                 if c is not None and c < it.get("best", it["price"]) - 0.009: crow[code] = [c, it["club_end"]]
+                if it.get("best_m"): pmrow[code] = it["best_m"]
+                if it.get("club_m") and (not it.get("best_m") or it["club_m"][0] < it["best_m"][0]): cmrow[code] = it["club_m"]
                 if len(it["name"]) > len(names.get(code, "")): names[code] = it["name"]
         groups = [(pc, [it for it in items.values() if it["w"] and R.search(clean_produce(it["name"])) and not BAD.search(it["name"])])
                   for pc, pn, R in PRODUCE_RX]
@@ -331,6 +338,8 @@ def build_chain(files, chain, cities, now=None):
         prices[key] = row
         if prow: promo[key] = prow
         if crow: club[key] = crow
+        if pmrow: promo_m[key] = pmrow
+        if cmrow: club_m[key] = cmrow
     for pc, pn, R in PRODUCE_RX: names[pc] = f'{pn} (לק"ג)'
     for sc, sn, R in STAPLES: names[sc] = sn
     for mc, mn, R, lo, hi in MEAT_RX: names[mc] = mn.replace(" (במשקל)", "") + ' (לק"ג)'
@@ -342,7 +351,7 @@ def build_chain(files, chain, cities, now=None):
         chain_he[key] = CHAIN_ID_HE.get(key.split("-")[0], CHAIN_HE.get(chain, chain))
     out = {"chain": chain, "fetched": datetime.now(IL).isoformat(timespec="minutes"),
            "stores": {k: dict(v, chain=chain_he[k], ts=latest.get(k, "")) for k, v in stores.items() if k in prices},
-           "fmt": 2, "names": names, "prices": prices, "promo": promo, "club": club,
+           "fmt": 2, "names": names, "prices": prices, "promo": promo, "club": club, "promo_m": promo_m, "club_m": club_m,
            "stats": {"store_files": len(kinds["stores"]), "price_files": len(kinds["price"]), "promo_files": len(kinds["promo"]),
                      "stores_with_prices": len(prices), "promo_hits": promo_n, "stores_listed": len(stores), "stores_with_club": len(club),
                      "meat_stores": sum(1 for r in prices.values() if any(k.startswith("M") for k in r))},
@@ -421,7 +430,7 @@ def carry_over(data, prev_path, max_age_h=30):
         ts = (prev.get("stores", {}).get(k, {}).get("ts") or "")[:12].ljust(12, "0")
         if ts < lim: continue
         data["prices"][k] = v; data["stores"][k] = prev["stores"][k]; n += 1
-        for part in ("promo", "club"):
+        for part in ("promo", "club", "promo_m", "club_m"):
             if k in prev.get(part, {}): data.setdefault(part, {})[k] = prev[part][k]
         for code in v:
             if code not in data["names"] and code in prev.get("names", {}): data["names"][code] = prev["names"][code]
@@ -467,6 +476,10 @@ def apply_delta(prev, files, now):
                 if it.get("club") is not None:
                     old = prev.setdefault("club", {}).setdefault(key, {}).get(c)
                     if not old or it["club"] < old[0]: prev["club"][key][c] = [it["club"], it["club_end"]]
+                for part, f2 in (("promo_m", "best_m"), ("club_m", "club_m")):
+                    if it.get(f2):
+                        old = prev.setdefault(part, {}).setdefault(key, {}).get(c)
+                        if not old or it[f2][0] < old[0]: prev[part][key][c] = it[f2]
         except Exception as ex:
             print("delta promo parse error", f, ex)
     prev["fetched"] = datetime.now(IL).isoformat(timespec="minutes")

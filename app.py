@@ -419,6 +419,24 @@ def gp(P, it):
     v = [P[g] for g in it["g"] if g in P]
     return min(v) if v else None
 
+def money(x): return f"{x:.2f}".rstrip("0").rstrip(".") if abs(x - round(x)) > 0.004 else f"{round(x)}"
+
+def lc(P, it):
+    """עלות השורה בסל בסניף (כמות × מחיר), כולל מבצעי כמות כשהכמות מספיקה. מחזיר (עלות, תיאור מבצע) או None"""
+    best = None; deals = getattr(P, "deals", {})
+    for g in it["g"]:
+        if g not in P: continue
+        reg = P[g]; q = it["qty"]; c = reg * q; txt = None
+        if g in deals:
+            u, k = deals[g]
+            bundle = u * k
+            if abs(bundle - round(bundle, 1)) < 0.025: bundle = round(bundle, 1)   # 3.33×3 → ₪10 (עיגול אגורות)
+            if q >= k:
+                n = int(q // k); c2 = n * bundle + (q - n * k) * reg
+                if c2 < c - 0.009: c, txt = c2, f"{k} ב־₪{money(bundle)}"
+        if best is None or c < best[0]: best = (c, txt)
+    return best
+
 def compute(u):
     D = kdata.D
     pr = dict(u["prefs"]); home = pr["home"]; car = pr["mode"] == "car"; bus = pr["mode"] == "bus"
@@ -455,10 +473,10 @@ def compute(u):
     for r in rows:
         tot = 0; miss = 0; mlist = []; have = 0
         for it in items:
-            p = gp(r["P"], it)
-            if p is None: miss += 1; p = med[it["i"]]; mlist.append(it["name"].replace(' (לק"ג)', ""))
-            else: have += p * it["qty"]               # מחיר מדויק – רק מה שיש בסניף (להצגה)
-            tot += p * it["qty"]                       # להשוואה בין סניפים – חסר מוערך לפי האזור
+            c = lc(r["P"], it)
+            if c is None: miss += 1; c = med[it["i"]] * it["qty"]; mlist.append(it["name"].replace(' (לק"ג)', ""))
+            else: c = c[0]; have += c                  # מחיר מדויק – רק מה שיש בסניף (להצגה), כולל מבצעי כמות
+            tot += c                                   # להשוואה בין סניפים – חסר מוערך לפי האזור
         r.update(mlist=mlist, have=have, sum=tot, fuel=cost(r["d"]), tot=tot + cost(r["d"]), miss=miss)
     nearest = rows[0]
     reg = next((r for r in rows if r["s"]["key"] == uk), None)
@@ -480,10 +498,10 @@ def compute(u):
             for b in range(a + 1, len(pool)):
                 A, B = pool[a], pool[b]; tot = 0; inA, inB = [], []; ok = True
                 for it in items:
-                    pa, pb = gp(A["P"], it), gp(B["P"], it)
+                    pa, pb = lc(A["P"], it), lc(B["P"], it)
                     if pa is None and pb is None: ok = False; break
-                    if pb is None or (pa is not None and pa <= pb): tot += pa * it["qty"]; inA.append(it["name"])
-                    else: tot += pb * it["qty"]; inB.append(it["name"])
+                    if pb is None or (pa is not None and pa[0] <= pb[0]): tot += pa[0]; inA.append(it["name"])
+                    else: tot += pb[0]; inB.append(it["name"])
                 if not ok or not inA or not inB: continue
                 d = km(home, A["s"]["p"]) + km(A["s"]["p"], B["s"]["p"]) + km(B["s"]["p"], home)
                 t = tot + cost(d)
@@ -526,17 +544,18 @@ def compute(u):
                      f"\n\n*{B['n']}* ({B['a']}):\n" + "\n".join("• " + x for x in split["inB"]))
     # פירוט מחירי הסל בסופר המנצח
     det = []
-    for it in sorted(items, key=lambda it: -(gp(best["P"], it) or med[it["i"]]) * it["qty"]):
-        p = gp(best["P"], it)
+    for it in sorted(items, key=lambda it: -((lc(best["P"], it) or (med[it["i"]] * it["qty"],))[0])):
+        c = lc(best["P"], it)
         q = f" ×{it['qty']:g}" if it["qty"] != 1 else ""
-        det.append(f"• {it['name']}{q} – " + (f"₪{p * it['qty']:.2f}" if p is not None else f"~₪{med[it['i']] * it['qty']:.2f} _(חסר בסניף)_"))
+        det.append(f"• {it['name']}{q} – " + (f"₪{c[0]:.2f}" + (f" 🔥 _מבצע {c[1]}_" if c[1] else "") if c is not None
+                                               else f"~₪{med[it['i']] * it['qty']:.2f} _(חסר בסניף)_"))
     if gone: det.append("\n_לא נמצאו במאגר: " + ", ".join(gone) + "_")
     fresh = f"\n\n_מחירים ומבצעים מעודכנים ל-{D.built[8:10]}/{D.built[5:7]} {D.built[11:16]}_" if len(D.built) >= 16 else ""
     saved = 0 if stay else (gap if reg else (avg - best["tot"] if avg else 0))
     ip = {}
     for it in items:                                   # מחיר כל מוצר בסופר המומלץ (ל"מה זיהיתי")
-        p = gp(best["P"], it)
-        ip[it.get("code", "")] = [round((p if p is not None else med[it["i"]]) * it["qty"], 2), p is None]
+        c = lc(best["P"], it)
+        ip[it.get("code", "")] = [round(c[0] if c else med[it["i"]] * it["qty"], 2), c is None, c[1] if c else None]
     return {"main": "\n".join(L), "store": s["n"], "saved": max(0, round(saved)), "ip": ip,
             "nav": f"https://waze.com/ul?ll={s['p'][0]},{s['p'][1]}&navigate=yes",
             "details": f"📋 *הסל שלך ב{s['n']}:*\n" + "\n".join(det) + fresh,
@@ -788,7 +807,7 @@ def understood_text(u, missed=()):
         a, b = toks(src), toks(x["name"])
         alt = f" _(כתבת: {src})_" if src and a and len(a & b) < 0.5 * len(a) else ""   # הצגה רק כשהזיהוי שונה ממה שנכתב
         pr = ip.get(x.get("code", ""))
-        price = ("" if not pr else " – ❌ _חסר בסניף_" if pr[1] else f" – ₪{pr[0]:.2f}")
+        price = ("" if not pr else " – ❌ _חסר בסניף_" if pr[1] else f" – ₪{pr[0]:.2f}" + (f" 🔥 _מבצע {pr[2]}_" if len(pr) > 2 and pr[2] else ""))
         if pr and not pr[1]: tot += pr[0]
         L.append(f"• {nm}{q}{price}{alt}")
     if tot: L.append(f"\n💰 *סה\"כ: ₪{tot:.2f}*")
@@ -929,8 +948,9 @@ def price_answer(to, u, item):
         for s in near:
             d1 = km(home, s["p"]); mn = car_min(d1) if pr["mode"] == "car" else (d1 / BUS_KMH * 60 + BUS_WAIT if pr["mode"] == "bus" else d1 / WALK_KMH * 60)
             if rows and mn > (min(pr["maxMin"], CAR_MAX_MIN) if pr["mode"] == "car" else pr["maxMin"]): break
-            p = gp(D.store_prices(s, clubs), dict(x, i=i, g=g))
-            if p is not None: rows.append((p, mn, s))
+            SP = D.store_prices(s, clubs); p = gp(SP, dict(x, i=i, g=g))
+            dl = min((SP.deals[j] for j in g if j in SP.deals), default=None)
+            if p is not None: rows.append((p, mn, s, f" 🔥 _{dl[1]} ב־₪{money(round(dl[0] * dl[1], 1) if abs(dl[0] * dl[1] - round(dl[0] * dl[1], 1)) < 0.025 else dl[0] * dl[1])}_" if dl else ""))
             if len(rows) >= MAX_POOL: break
         if len(rows) >= 2: break
     if not rows: return send_text(to, f"לא מצאתי את *{D.items[i][1]}* בסופרים באזור שלך 🙁")
@@ -938,8 +958,8 @@ def price_answer(to, u, item):
     unit = " לק\"ג" if kg else ""
     L = [f"💰 *{D.items[i][1]}* – באזור שלך:", ""]
     ride = "🚗" if pr["mode"] == "car" else ("🚌" if pr["mode"] == "bus" else "🚶")
-    for k, (p, mn, s) in enumerate(rows[:5]):
-        L.append(f"{'🏆' if k == 0 else '▫️'} {s['n']} – *₪{p:.2f}*{unit} · {ride} {round(mn)} דק'")
+    for k, (p, mn, s, dl) in enumerate(rows[:5]):
+        L.append(f"{'🏆' if k == 0 else '▫️'} {s['n']} – *₪{p:.2f}*{unit}{dl} · {ride} {round(mn)} דק'")
     if len(rows) > 1 and rows[-1][0] - rows[0][0] >= 0.5:
         L.append(f"\n✅ הפרש של עד ₪{rows[-1][0] - rows[0][0]:.2f} בין הסופרים באזור")
     return send_text(to, "\n".join(L))

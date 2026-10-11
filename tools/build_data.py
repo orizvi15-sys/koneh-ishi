@@ -156,6 +156,7 @@ def main():
     geo = load_json(a.geocache, {})
 
     stores, prices, namecnt, chains, clubp, promop = {}, {}, defaultdict(Counter), {}, {}, {}
+    promom, clubm = {}, {}
     for f in sorted(glob.glob(os.path.join(a.indir, "chain-*.json.gz"))):
         d = json.load(gzip.open(f, "rt", encoding="utf-8"))
         chains[d["chain"]] = {"fetched": d.get("fetched"), "stores": len(d["prices"]), "stats": d.get("stats")}
@@ -174,6 +175,9 @@ def main():
             else: clubp.pop(k, None)
             if k in d.get("promo", {}): promop[k] = ov(d["promo"][k])
             else: promop.pop(k, None)
+            for part, store_ in (("promo_m", promom), ("club_m", clubm)):      # מבצעי כמות: [מחיר ליחידה, תוקף, כמות]
+                if k in d.get(part, {}): store_[k] = {c: tuple(v) for c, v in d[part][k].items()}
+                else: store_.pop(k, None)
     print("chains", len(chains), "stores with prices", len(prices))
 
     # ---- שמות ערים ומיקומים ----
@@ -300,12 +304,14 @@ def main():
     def pack_ov(omap):
         """שכבת מבצעים: אינדקס, מחיר באגורות, ותוקף (דקות מאז 1970)"""
         nonlocal body
-        row = sorted((idx[c], int(round(p * 100)), int(e)) for c, (p, e) in omap.items() if c in idx and 0 < p < 50000)
+        row = sorted((idx[c], int(round(v[0] * 100)), int(v[1]), int(v[2]) if len(v) > 2 else 1)
+                     for c, v in omap.items() if c in idx and 0 < v[0] < 50000)
         if not row: return None
-        d = array.array("H"); pr = array.array("I"); en = array.array("I"); last = 0
-        for i, p, e in row:
-            d.append(i - last); last = i; pr.append(p); en.append(min(e, 2 ** 32 - 1))
-        raw = struct.pack("<I", len(row)) + d.tobytes() + pr.tobytes() + en.tobytes()
+        multi = any(q > 1 for _, _, _, q in row)
+        d = array.array("H"); pr = array.array("I"); en = array.array("I"); qs = array.array("H"); last = 0
+        for i, p, e, q in row:
+            d.append(i - last); last = i; pr.append(p); en.append(min(e, 2 ** 32 - 1)); qs.append(min(q, 999))
+        raw = struct.pack("<I", len(row)) + d.tobytes() + pr.tobytes() + en.tobytes() + (qs.tobytes() if multi else b"")
         h = hashlib.sha1(raw).hexdigest()
         if h not in blob_of:
             z = zlib.compress(raw, 9); blob_of[h] = len(blobs); blobs.append((len(body), len(z))); body += z
@@ -319,9 +325,12 @@ def main():
         cb = pack_ov(clubp[k]) if k in clubp else None
         pb = pack_ov(promop[k]) if k in promop else None
         n_club += cb is not None; n_promo += pb is not None
+        mb = pack_ov(promom[k]) if k in promom else None
+        cmb = pack_ov(clubm[k]) if k in clubm else None
         s = located[k]
         store_rows.append([k, s["chain"], s["name"], s["addr"], s["city"], round(s["p"][0], 6), round(s["p"][1], 6),
-                           b, s.get("ts", ""), s.get("prec", ""), -1 if cb is None else cb, -1 if pb is None else pb])
+                           b, s.get("ts", ""), s.get("prec", ""), -1 if cb is None else cb, -1 if pb is None else pb,
+                           -1 if mb is None else mb, -1 if cmb is None else cmb])
     print("stores with promos:", n_promo, "with club prices:", n_club)
 
     # חציון ארצי לכל מוצר (לפי וקטורים ייחודיים)
