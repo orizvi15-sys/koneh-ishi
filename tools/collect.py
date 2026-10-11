@@ -53,7 +53,7 @@ PRODUCE_RX = [(f"P{i:02d}", n, re.compile(rx)) for i, (n, rx) in enumerate(PRODU
 # בשר, עוף ודגים טריים במשקל (מחיר לק"ג) – לכל רשת קוד פנימי משלה, מאחדים לפי שם. (שם, ביטוי, מחיר מינ'/מקס' לק"ג)
 NO_MEAT = r"(?!.*(מעושן|ממולא|מתובל|מרינד|שיפוד|נקניק|קפוא|מוקפא|פריך|מצופה|ציפוי|טבעול|טבעוני|צמחי|כבד|מבושל|צלוי|לחתול|לכלב|ברוטב))"
 MEAT = [
- ("חזה עוף", r"^(פילה |נתחי |נתח )?חזה (עוף|של עוף)(?!.*טחון)" + NO_MEAT, 18, 85),
+ ("חזה עוף", r"^(פילה |נתחי |נתח )?(חזה (שלם )?(עוף|של עוף)|פילה עוף)(?!.*(טחון|עצם|עם עור|כנפ))" + NO_MEAT, 25, 85),
  ("שניצל עוף טרי", r"^(שניצל|שניצלים)( עוף| חזה עוף| מחזה עוף)?( טרי| דק| פרוס)*$", 20, 85),
  ("פרגיות", r"^(פרגית|פרגיות|סטייק פרגית)" + NO_MEAT, 25, 95),
  ("כרעיים עוף", r"^(כרעיים|כרעי|כרע) (עוף|שלמים|שלם)" + NO_MEAT, 8, 45),
@@ -294,7 +294,7 @@ def build_chain(files, chain, cities, now=None):
             print("promo parse error", f, ex)
 
     names, prices, promo, club = {}, {}, {}, {}
-    meat_seen = set(); wdisp = {}
+    meat_seen = set(); wdisp = {}; mnames = {}
     for key, items in per_store.items():
         row, prow, crow = {}, {}, {}
         for code, it in items.items():
@@ -308,8 +308,12 @@ def build_chain(files, chain, cities, now=None):
                   for pc, pn, R in PRODUCE_RX]
         groups += [(sc, [it for it in items.values() if R.search(it["name"]) and not STAPLE_BAD.search(it["name"]) and 8 <= it["price"] <= 30])
                    for sc, sn, R in STAPLES]
-        groups += [(mc, [it for it in items.values() if it["w"] and R.search(clean_produce(it["name"])) and lo <= it["price"] <= hi])
-                   for mc, mn, R, lo, hi in MEAT_RX]
+        mg = [(mc, [it for it in items.values() if it["w"] and R.search(clean_produce(it["name"])) and lo <= it["price"] <= hi])
+              for mc, mn, R, lo, hi in MEAT_RX]
+        for mc, its in mg:                                      # לבדיקה: אילו שמות נתפסו בכל קבוצה
+            for it in its:
+                if len(mnames.setdefault(mc, set())) < 25: mnames[mc].add(f'{clean_produce(it["name"])} | {it["price"]}')
+        groups += mg
         for it in items.values():                               # דוגמאות לבדיקה: שמות בשר/עוף במשקל
             if it["w"] and MEAT_WORDS.search(it["name"]) and len(meat_seen) < 250: meat_seen.add(f'{clean_produce(it["name"])} | {it["price"]}')
         used = {id(it) for gc, its in groups for it in its}
@@ -342,7 +346,7 @@ def build_chain(files, chain, cities, now=None):
            "stats": {"store_files": len(kinds["stores"]), "price_files": len(kinds["price"]), "promo_files": len(kinds["promo"]),
                      "stores_with_prices": len(prices), "promo_hits": promo_n, "stores_listed": len(stores), "stores_with_club": len(club),
                      "meat_stores": sum(1 for r in prices.values() if any(k.startswith("M") for k in r))},
-           "meat_samples": sorted(meat_seen)}
+           "meat_samples": sorted(meat_seen), "meat_matched": {k: sorted(v) for k, v in mnames.items()}}
     return out
 
 
