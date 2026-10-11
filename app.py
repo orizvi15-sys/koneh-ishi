@@ -34,6 +34,7 @@ import kdata  # הנתונים הארציים – kdata.D הוא תמיד הגר
 FUEL, KM_PER_L, ROAD, CAR_KMH, WALK_KMH, PARK_MIN = 7.77, 13, 1.3, 28, 4.5, 3
 MAX_POOL = 25
 STAY_MIN = 35           # פחות מזה – לא שווה לעזוב את הסופר הקבוע
+STAY_MIN_WEIGHED = 25   # כשמשווים רק מוצרים במשקל (קילו בשר, סלמון...) – סף נמוך יותר
 SPLIT_MIN = 40          # מציעים לפצל בין שני סופרים רק אם חוסכים יותר מ-₪40
 BUS_KMH, BUS_WAIT = 15, 10  # כמה סניפים קרובים לכל היותר נבדקים בכל חישוב
 WEEKLY = [["חלב 3% בקרטון 2 ליטר", 2], ["גבינת קוטג 5% 250 גרם", 2], ["לחם אחיד פרוס 900 גר פיקוח אנג`ל", 2],
@@ -468,7 +469,9 @@ def compute(u):
                 d = km(home, A["s"]["p"]) + km(A["s"]["p"], B["s"]["p"]) + km(B["s"]["p"], home)
                 t = tot + cost(d)
                 if not split or t < split["tot"]: split = {"A": A, "B": B, "tot": t, "inA": inA, "inB": inB}
-    stay = reg is not None and reg["tot"] - best["tot"] < STAY_MIN
+    weighed = all(D.items[it["i"]][0][:1] in ("M", "W", "P") for it in items)   # רק מוצרים במשקל (בשר, דגים, ירקות…)
+    stay_min = STAY_MIN_WEIGHED if weighed else STAY_MIN
+    stay = reg is not None and reg["tot"] - best["tot"] < stay_min
     gap = reg["tot"] - best["tot"] if reg else 0
     if stay:                                   # לא שווה לעזוב את הסופר הקבוע
         alt = best; best = reg
