@@ -467,7 +467,7 @@ def lc(P, it):
 
 def compute(u):
     D = kdata.D
-    pr = dict(u["prefs"]); home = pr["home"]; car = pr["mode"] == "car"; bus = pr["mode"] == "bus"
+    pr = fill_prefs(dict(u["prefs"])); home = pr["home"]; car = pr["mode"] == "car"; bus = pr["mode"] == "bus"
     if car and pr.get("maxMin", 999) > CAR_MAX_MIN: pr["maxMin"] = CAR_MAX_MIN   # בלי עלות דלק – לא שולחים רחוק מדי
     split_min = -1 if pr.get("splitMin", SPLIT_MIN) < 0 else SPLIT_MIN
     clubs = set(pr.get("clubs") or [])
@@ -1195,7 +1195,7 @@ def price_answer(to, u, item):
     found, _ = match_items([item])
     if not found: return send_text(to, f"לא מצאתי את *{item['name']}* במאגר 🙁 נסו לכתוב קצת אחרת.")
     x = found[0]; D = kdata.D
-    pr = u["prefs"]; home = pr["home"]; clubs = set(pr.get("clubs") or [])
+    pr = fill_prefs(u["prefs"]); home = pr["home"]; clubs = set(pr.get("clubs") or [])
     near = sorted(D.stores, key=lambda s: km(home, s["p"]))[:MAX_POOL * 2]
     for code in [x["code"]] + list(x.get("c") or []):        # אם המוצר שנבחר לא נמכר באזור – מנסים את החלופה הבאה
         i = D.code2i.get(code)
@@ -1407,8 +1407,14 @@ def settings_action(to, u, reply):
     if reply == "reset_yes":
         return handle({"from": to, "type": "text", "text": {"body": "איפוס מלא"}})
 
+def fill_prefs(pr):
+    """ברירות מחדל להעדפות (ההרשמה הקצרה שואלת רק מיקום ומועדון) – כדי שאף פעם לא יחסר "mode" וכו'"""
+    if pr.get("home"):
+        pr.setdefault("mode", "car"); pr.setdefault("maxMin", 999); pr.setdefault("brand", "cheap"); pr.setdefault("splitMin", SPLIT_MIN)
+    return pr
+
 def handle(msg):
-    to = msg["from"]; u = user(to); t = msg.get("type"); pr = u["prefs"]
+    to = msg["from"]; u = user(to); t = msg.get("type"); pr = fill_prefs(u["prefs"])
     reply = None
     if t == "interactive":
         it = msg["interactive"]; reply = (it.get("button_reply") or it.get("list_reply") or {}).get("id")
@@ -1473,7 +1479,7 @@ def handle(msg):
     if reply == "reset": u["prefs"] = {}; return ask(to, "loc", u)
 
     if t == "location":
-        pr["home"] = [msg["location"]["latitude"], msg["location"]["longitude"]]
+        pr["home"] = [msg["location"]["latitude"], msg["location"]["longitude"]]; fill_prefs(pr)
         if u["step"] == "loc":           # בלי שאלת "איך מגיעים": ברכב, כל הסניפים הקרובים (עלות הדלק בחישוב)
             pr.setdefault("mode", "car"); pr.setdefault("maxMin", 999); pr.setdefault("brand", "cheap")
             return ask(to, "clubq", u)

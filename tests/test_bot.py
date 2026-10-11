@@ -191,6 +191,13 @@ def _():
     press(to, "oth"); assert "סופרים" in last()
     press(to, "fix"); assert "לתקן" in last()
 
+@test("קבלה ממשתמש שיש לו רק מיקום (בלי mode) – לא קורס (באג 12/10 KeyError 'mode')")
+def _():
+    to = "tg:3020"; app.USERS[to] = {"step": "basket", "prefs": {"home": [31.9115, 34.7888]}, "hist": []}
+    photo(to); assert any("מחיר הסל" in t for t in texts()), texts()
+    to = "tg:3021"; app.USERS[to] = {"step": "basket", "prefs": {"home": [31.9115, 34.7888]}, "hist": []}
+    send(to, "חלב, לחם"); assert any("מחיר הסל" in t for t in texts()), texts()
+
 @test("הודעה קולית בלי מפתח → הסבר ידידותי")
 def _():
     to = "tg:3010"; setup_user(to); voice(to); assert "קוליות" in last() or "הקלטה" in last(), last()
