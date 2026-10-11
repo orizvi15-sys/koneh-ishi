@@ -323,6 +323,7 @@ def compute(u):
     D = kdata.D
     pr = u["prefs"]; home = pr["home"]; car = pr["mode"] == "car"; bus = pr["mode"] == "bus"
     split_min = -1 if pr.get("splitMin", SPLIT_MIN) < 0 else SPLIT_MIN
+    clubs = set(pr.get("clubs") or [])
     cost = lambda d: d * FUEL / KM_PER_L if car else 0
     mins = lambda d: d / CAR_KMH * 60 + PARK_MIN if car else (d / BUS_KMH * 60 + BUS_WAIT if bus else d / WALK_KMH * 60)
     items, gone = [], []
@@ -339,7 +340,7 @@ def compute(u):
     rows = []
     for k, (d1, s) in enumerate(near[:MAX_POOL * 2]):
         if k > 0 and mins(d1) > pr["maxMin"] and len(rows) >= 1: break
-        rows.append({"s": s, "d": 2 * d1, "min": mins(d1), "P": D.prices(s["blob"])})
+        rows.append({"s": s, "d": 2 * d1, "min": mins(d1), "P": D.store_prices(s, clubs), "club": s["chain"] in clubs and s.get("cblob", -1) >= 0})
         if len(rows) >= MAX_POOL: break
     # חציון מקומי למוצרים שחסרים בסניף מסוים
     med = {}
@@ -387,7 +388,7 @@ def compute(u):
     if far_km > 25:
         L.append(f"⚠️ _עדיין אין לי סניפים באזור שלך (הקרוב ביותר: {far_km:.0f} ק\"מ)._\n")
     L.append(f"🏆 הסופר המנצח: *{s['n']}*")
-    L.append(f"💰 מחיר הסל: *₪{best['tot']:.0f}*")
+    L.append(f"💰 מחיר הסל: *₪{best['tot']:.0f}*" + (" (במחירי מועדון)" if best.get("club") else ""))
     if avg and avg - best["tot"] >= 1:
         L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}*" + (" (כולל עלות הנסיעה)" if car else ""))
     L.append(f"📍 {best['d'] / 2:.1f} ק\"מ ממך · {round(best['min'])} דק' {how}")

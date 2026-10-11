@@ -165,7 +165,8 @@ def pdate(d, h=""):
 
 
 def apply_promos(root, items, now):
-    """מעדכן items[code]['best'] לפי מבצעים תקפים לכלל הלקוחות, בלי קופון ובלי מינימום קנייה."""
+    """מעדכן items[code]['best'] (מבצע לכלל הלקוחות) ו-items[code]['club'] (מבצע לחברי מועדון),
+    בלי קופונים, בלי הטבות כרטיס אשראי ובלי מינימום קנייה."""
     n = 0
     for pr in root.iter():
         if pr.tag not in ("promotion", "sale"): continue
@@ -176,9 +177,10 @@ def apply_promos(root, items, now):
         if not (s <= now <= e): continue
         if deep(pr, "additionaliscoupon") == "1": continue
         clubs = [x.text.strip() for x in pr.iter("clubid") if x.text and x.text.strip()]
-        if clubs and not any(c.startswith("0") for c in clubs): continue
         desc = re.sub(r'\s+', ' ', deep(pr, "promotiondescription"))
-        if re.search(r'תו זהב|מועדון|לחברי|קופון|כרטיס אשראי|באשראי', desc): continue
+        if re.search(r'קופון|כרטיס אשראי|באשראי|ויזה|מסטרקארד|אמריקן|דיינרס', desc): continue
+        is_club = bool(clubs and not any(c.startswith("0") for c in clubs)) or bool(re.search(r'תו זהב|מועדון|לחברי', desc))
+        key = "club" if is_club else "best"
         if (num(deep(pr, "minpurchaseamount", "minpurchaseamnt")) or 0) > 0: continue
         m = re.search(r'(\d+)\s*ב\s*-?\s*(\d+(?:\.\d+)?)', desc)
         pis = [x for x in pr.iter() if x is not pr and x.find("itemcode") is not None]
@@ -199,7 +201,7 @@ def apply_promos(root, items, now):
                 cands.append(dp)
             for u in cands:
                 if 0.3 * reg <= u < reg - 0.009:
-                    if u < it.get("best", reg): it["best"] = round(u, 2); n += 1
+                    if u < it.get(key, reg): it[key] = round(u, 2); n += 1
                     break
     return n
 
@@ -237,12 +239,13 @@ def build_chain(files, chain, cities, now=None):
         except Exception as ex:
             print("promo parse error", f, ex)
 
-    names, prices = {}, {}
+    names, prices, club = {}, {}, {}
     for key, items in per_store.items():
-        row = {}
+        row, crow = {}, {}
         for code, it in items.items():
             if is_barcode(code, it):
                 row[code] = it.get("best", it["price"])
+                if it.get("club") is not None and it["club"] < row[code] - 0.009: crow[code] = it["club"]
                 if len(it["name"]) > len(names.get(code, "")): names[code] = it["name"]
         for pc, pn, R in PRODUCE_RX:
             c = [it.get("best", it["price"]) for it in items.values()
@@ -253,6 +256,7 @@ def build_chain(files, chain, cities, now=None):
                  if R.search(it["name"]) and not STAPLE_BAD.search(it["name"]) and 8 <= it["price"] <= 30]
             if c: row[sc] = min(c)
         prices[key] = row
+        if crow: club[key] = crow
     for pc, pn, R in PRODUCE_RX: names[pc] = f'{pn} (לק"ג)'
     for sc, sn, R in STAPLES: names[sc] = sn
     for key in prices:
@@ -262,9 +266,9 @@ def build_chain(files, chain, cities, now=None):
         chain_he[key] = CHAIN_ID_HE.get(key.split("-")[0], CHAIN_HE.get(chain, chain))
     out = {"chain": chain, "fetched": datetime.now(IL).isoformat(timespec="minutes"),
            "stores": {k: dict(v, chain=chain_he[k], ts=latest.get(k, "")) for k, v in stores.items() if k in prices},
-           "names": names, "prices": prices,
+           "names": names, "prices": prices, "club": club,
            "stats": {"store_files": len(kinds["stores"]), "price_files": len(kinds["price"]), "promo_files": len(kinds["promo"]),
-                     "stores_with_prices": len(prices), "promo_hits": promo_n, "stores_listed": len(stores)}}
+                     "stores_with_prices": len(prices), "promo_hits": promo_n, "stores_listed": len(stores), "stores_with_club": len(club)}}
     return out
 
 

@@ -93,7 +93,7 @@ def main():
         if c2: cities = c2; json.dump(cities, open(a.cities, "w", encoding="utf-8"), ensure_ascii=False)
     geo = load_json(a.geocache, {})
 
-    stores, prices, namecnt, chains = {}, {}, defaultdict(Counter), {}
+    stores, prices, namecnt, chains, clubp = {}, {}, defaultdict(Counter), {}, {}
     for f in sorted(glob.glob(os.path.join(a.indir, "chain-*.json.gz"))):
         d = json.load(gzip.open(f, "rt", encoding="utf-8"))
         chains[d["chain"]] = {"fetched": d.get("fetched"), "stores": len(d["prices"]), "stats": d.get("stats")}
@@ -106,6 +106,8 @@ def main():
             if len(ts) >= 8 and ts[:2] == "20" and ts[:8] < old: continue  # קובץ ישן מדי (הרשת לא מעדכנת)
             if k in prices and stores[k].get("ts", "") > ts: continue
             prices[k] = v; stores[k] = d["stores"][k]
+            if k in d.get("club", {}): clubp[k] = d["club"][k]
+            else: clubp.pop(k, None)
     print("chains", len(chains), "stores with prices", len(prices))
 
     # ---- שמות ערים ומיקומים ----
@@ -167,9 +169,10 @@ def main():
     # ---- בלוקים לכל סניף ----
     blobs, blob_of, body, store_rows = [], {}, bytearray(), []
     vec_count = Counter(); vec_store = {}
-    for k in sorted(located):
-        row = sorted((idx[c], int(round(p * 100))) for c, p in prices[k].items() if c in idx and 0 < p < 50000)
-        if not row: continue
+    def pack(pmap):
+        nonlocal body
+        row = sorted((idx[c], int(round(p * 100))) for c, p in pmap.items() if c in idx and 0 < p < 50000)
+        if not row: return None, None
         d = array.array("H"); pr = array.array("I"); last = 0
         for i, p in row:
             d.append(i - last); last = i; pr.append(p)
@@ -177,11 +180,19 @@ def main():
         h = hashlib.sha1(raw).hexdigest()
         if h not in blob_of:
             z = zlib.compress(raw, 9); blob_of[h] = len(blobs); blobs.append((len(body), len(z))); body += z
-            vec_store[h] = row
-        vec_count[h] += 1
+        return blob_of[h], (h, row)
+
+    n_club = 0
+    for k in sorted(located):
+        b, hr = pack(prices[k])
+        if b is None: continue
+        h, row = hr; vec_store.setdefault(h, row); vec_count[h] += 1
+        cb = pack(clubp[k])[0] if k in clubp else None
+        if cb is not None: n_club += 1
         s = located[k]
         store_rows.append([k, s["chain"], s["name"], s["addr"], s["city"], round(s["p"][0], 6), round(s["p"][1], 6),
-                           blob_of[h], s.get("ts", ""), s.get("prec", "")])
+                           b, s.get("ts", ""), s.get("prec", ""), -1 if cb is None else cb])
+    print("stores with club prices:", n_club)
 
     # חציון ארצי לכל מוצר (לפי וקטורים ייחודיים)
     per_item = defaultdict(list)

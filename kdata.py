@@ -71,6 +71,14 @@ class Data:
             while len(self._cache) > 300: self._cache.popitem(last=False)
         return m
 
+    def store_prices(self, store, clubs=()):
+        """מחירי הסניף; לחבר מועדון של הרשת – משולב עם מחירי המועדון"""
+        P = self.prices(store["blob"])
+        if store.get("cblob", -1) >= 0 and store["chain"] in clubs:
+            C = self.prices(store["cblob"])
+            P = dict(P); P.update({i: v for i, v in C.items() if v < P.get(i, 1e9)})
+        return P
+
     def price(self, store, i):
         return self.prices(store["blob"]).get(i)
 
@@ -158,9 +166,11 @@ def _from_bin(path):
         return out
 
     stores = []
-    for key, chain, name, addr, city, lat, lng, blob, ts, prec in h["stores"]:
+    for row in h["stores"]:
+        key, chain, name, addr, city, lat, lng, blob, ts, prec = row[:10]
+        cblob = row[10] if len(row) > 10 else -1
         n, a = _display(chain, name, addr, city)
-        stores.append({"key": key, "chain": chain, "n": n, "a": a, "p": [lat, lng], "blob": blob, "ts": ts, "prec": prec})
+        stores.append({"key": key, "chain": chain, "n": n, "a": a, "p": [lat, lng], "blob": blob, "ts": ts, "prec": prec, "cblob": cblob})
     return Data(h["items"], stores, h["v"], h.get("built", ""), reader, "remote")
 
 
