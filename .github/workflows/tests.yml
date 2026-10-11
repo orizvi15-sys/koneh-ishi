@@ -1,0 +1,24 @@
+# שיחות מבחן אוטומטיות – רצות על כל שינוי בקוד הבוט.
+# ב-Render מוגדר "Auto-Deploy: After CI Checks Pass" → אם בדיקה נכשלת, העדכון לא עולה לבוט.
+name: tests
+on:
+  push:
+    paths: ["app.py", "kdata.py", "tests/**", "requirements.txt", ".github/workflows/tests.yml"]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -q -r requirements.txt
+      - name: Price data (latest)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh release download data-latest -p koneh-data.bin -D data -R "$GITHUB_REPOSITORY"
+      - name: Conversation tests
+        run: python tests/test_bot.py

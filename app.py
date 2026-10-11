@@ -635,6 +635,9 @@ def finish(to, u, redo=False):
         for m in res: send_text(to, m)
     else:
         u["last"] = {k: res[k] for k in ("details", "others", "split", "store", "ip")}; saved = res.get("saved", 0)
+        if not redo:
+            wk_count("baskets")
+            wk_count("missing", [f"{x['name']} @ {res['store']}" for x in u["items"] if (res["ip"].get(x.get("code", "")) or [0, False])[1]])
         n, miss = len(u["items"]), len(u.get("missed") or [])
         main = res["main"] + f"\n🧾 זיהיתי {n} מוצרים" + (f" ({miss} לא נמצאו)" if miss else "")
         if u.get("note"): main += "\n\n" + u.pop("note")
@@ -740,6 +743,28 @@ def send_reminder(to, u):
 MAJOR = {"SHUFERSAL": "שופרסל", "RAMI_LEVY": "רמי לוי", "YOHANANOF": "יוחננוף", "OSHER_AD": "אושר עד",
          "TIV_TAAM": "טיב טעם", "YAYNO_BITAN_AND_CARREFOUR": "קרפור", "VICTORY_NEW_SOURCE": "ויקטורי", "HAZI_HINAM": "חצי חינם"}
 _watch = {"t": 0}
+
+# ---------- מונים לדוח השבועי ----------
+def wk():
+    """מונים של השבוע הנוכחי (נשמרים עם המשתמשים, מתאפסים אחרי שליחת הדוח)"""
+    w = USERS.setdefault("_meta", {}).setdefault("wk", {})
+    w.setdefault("since", int(time.time()))
+    for k in ("baskets", "receipts", "r_partial", "r_bad", "errors"): w.setdefault(k, 0)
+    for k in ("notfound", "missing"): w.setdefault(k, {})
+    return w
+
+def wk_count(key, names=None):
+    try:
+        w = wk()
+        if names is None: w[key] = w.get(key, 0) + 1; return
+        d = w[key]
+        for n in names:
+            n = str(n)[:60]
+            if n: d[n] = d.get(n, 0) + 1
+        if len(d) > 400:                                     # שומרים רק את השכיחים
+            for k2 in sorted(d, key=d.get)[:len(d) - 300]: d.pop(k2)
+    except Exception as ex:
+        print("wk error", ex, flush=True)
 
 def _iso_age_h(iso):
     try: return (time.time() - _dt.fromisoformat(iso).timestamp()) / 3600
@@ -894,6 +919,86 @@ def selftest_daily():
         for a in [a for a in admins() if is_tg(a)]:
             send_text(a, "🧪 *בדיקה יומית – נמצאה בעיה*\n\n" + "\n".join("⚠️ " + p for p in probs[:12]) + ("\n\n" + summ if summ else ""))
 
+# ---------- דוח שבועי למנהל: מצב כל רשת + סניפים שלא עובדים + מה המשתמשים לא מצאו ----------
+CHAIN_HE = {"SHUFERSAL": "שופרסל", "RAMI_LEVY": "רמי לוי", "YOHANANOF": "יוחננוף", "OSHER_AD": "אושר עד", "VICTORY_NEW_SOURCE": "ויקטורי",
+            "TIV_TAAM": "טיב טעם", "YAYNO_BITAN_AND_CARREFOUR": "קרפור", "HAZI_HINAM": "חצי חינם", "MAHSANI_ASHUK_NEW_SOURCE": "מחסני השוק",
+            "KESHET": "קשת טעמים", "BAREKET": "ברקת", "CITY_MARKET_KIRYATGAT": "סיטי מרקט", "CITY_MARKET_SHOPS": "סיטי מרקט",
+            "DOR_ALON": "דור אלון", "HET_COHEN_NEW_SOURCE": "ח. כהן", "KING_STORE": "קינג סטור", "NETIV_HASED": "נתיב החסד",
+            "POLIZER": "פוליצר", "SALACH_DABACH": "סאלח דבאח", "SHEFA_BARCART_ASHEM": "שפע ברכת השם", "SHUK_AHIR": "שוק העיר",
+            "STOP_MARKET": "סטופ מרקט", "SUPER_YUDA": "סופר יודה", "SUPER_SAPIR": "סופר ספיר", "FRESH_MARKET_AND_SUPER_DOSH": "פרש מרקט",
+            "YELLOW": "יילו", "ZOL_VEBEGADOL": "זול ובגדול"}
+STALE_H = 48          # סניף שהמחירים שלו ישנים מיומיים = "לא מתעדכן"
+
+def _ts_age_h(ts):
+    try: return (time.time() - _dt.strptime(str(ts)[:12], "%Y%m%d%H%M").replace(tzinfo=IL_TZ).timestamp()) / 3600
+    except Exception: return None
+
+def track_stores():
+    """זוכר אילו סניפים היו בנתונים, כדי לדעת אילו "נעלמו" (רשת הפסיקה לפרסם להם מחירים)"""
+    D = kdata.D
+    if not D or D.source != "remote": return
+    seen = USERS.setdefault("_meta", {}).setdefault("stores_seen", {}); now = int(time.time())
+    for st in D.stores: seen[st["key"]] = [st["chain"], st["n"], now]
+    for k in [k for k, v in seen.items() if now - v[2] > 30 * 86400]: seen.pop(k)   # נעלם מעל חודש – מפסיקים לדווח
+
+def weekly_report():
+    D = kdata.D; w = wk(); meta = USERS.setdefault("_meta", {}); now = int(time.time())
+    if not D: return "אין נתונים"
+    cur = {st["key"] for st in D.stores}
+    gone = {}
+    for k, (ch, n, last) in (meta.get("stores_seen") or {}).items():
+        if k not in cur and now - last > 86400: gone.setdefault(ch, []).append(n)
+    by = {}
+    for st in D.stores: by.setdefault(st["chain"], []).append(st)
+    info = {}                                                  # מצב ההורדה של כל רשת (מהשרת/GitHub)
+    for sc, i in (D.chains or {}).items():
+        he = CHAIN_HE.get(sc, sc); x = info.setdefault(he, {"age": None, "nolist": 0})
+        a = _iso_age_h(i.get("fetched", ""))
+        if a is not None: x["age"] = a if x["age"] is None else max(x["age"], a)
+        stt = i.get("stats") or {}
+        x["nolist"] += max(0, stt.get("stores_listed", 0) - stt.get("stores_with_prices", 0))
+    big = [c for c in BIG_CHAINS if c in by] + sorted((c for c in by if c not in BIG_CHAINS), key=lambda c: -len(by[c]))
+    ok, bad = [], []
+    for ch in big:
+        stale = [st for st in by[ch] if (_ts_age_h(st.get("ts")) or 0) > STALE_H]
+        g = gone.get(ch, []); i = info.get(ch, {}); probs = []
+        if i.get("age") is not None and i["age"] > 12: probs.append(f"❌ הרשת לא התעדכנה כבר {i['age']:.0f} שעות")
+        if stale: probs.append(f"⏳ {len(stale)} סניפים עם מחירים ישנים (מעל יומיים): " + ", ".join(st["n"].replace(ch, "").strip() for st in stale[:6]) + (" ועוד" if len(stale) > 6 else ""))
+        if g: probs.append(f"🚫 {len(g)} סניפים נעלמו מהנתונים: " + ", ".join(n.replace(ch, "").strip() for n in g[:6]) + (" ועוד" if len(g) > 6 else ""))
+        if probs: bad.append(f"⚠️ *{ch}* – {len(by[ch])} סניפים\n" + "\n".join("   " + p for p in probs))
+        else: ok.append(f"{ch} ({len(by[ch])})")
+    since = _dt.fromtimestamp(w.get("since", now), IL_TZ).strftime("%d/%m")
+    L = [f"🗓️ *דוח שבועי – קונה אישי* ({since}–{_dt.now(IL_TZ).strftime('%d/%m')})", "",
+         f"🏪 *מצב הרשתות* – {len(D.stores):,} סניפים, {len(by)} רשתות"]
+    L += bad or ["כל הרשתות והסניפים מתעדכנים כרגיל 👌"]
+    if ok: L.append("✅ תקין: " + ", ".join(ok))
+    nl = sorted(((c, x["nolist"]) for c, x in info.items() if x["nolist"] >= 3), key=lambda x: -x[1])[:5]
+    if nl: L.append("📭 סניפים ברשימת הרשת בלי קובץ מחירים (בדרך כלל סגורים/חדשים): " + ", ".join(f"{c} {n}" for c, n in nl))
+    nb = w.get("receipts", 0)
+    L += ["", "👥 *שימוש השבוע*", f"🛒 קניות שנבדקו: {w.get('baskets', 0)} · 🧾 קבלות: {nb}"
+          + (f" (חלקיות: {w.get('r_partial', 0)}, לא נקראו: {w.get('r_bad', 0)})" if nb else ""),
+          f"🚨 תקלות: {w.get('errors', 0)}"]
+    top = lambda d, k=8: sorted(d.items(), key=lambda x: -x[1])[:k]
+    if w.get("notfound"):
+        L += ["", "🔎 *מוצרים שהבוט לא מצא* (כדאי ללמד אותו):"] + [f"• {n} ×{c}" for n, c in top(w["notfound"])]
+    if w.get("missing"):
+        L += ["", "❌ *יצאו \"חסר\" בסופר המומלץ הכי הרבה:*"] + [f"• {n} ×{c}" for n, c in top(w["missing"])]
+    return "\n".join(L)
+
+_weekly_sent = {"wk": ""}
+def weekly_report_tick():
+    """כל יום ראשון ב-10:00 – שולחים את הדוח ומאפסים את המונים"""
+    il = _dt.now(IL_TZ)
+    track_stores() if il.minute == 0 else None
+    tag = il.strftime("%G-%V")
+    if il.weekday() != 6 or il.hour < 10 or _weekly_sent["wk"] == tag: return
+    meta = USERS.setdefault("_meta", {})
+    if meta.get("weekly_sent") == tag: _weekly_sent["wk"] = tag; return
+    _weekly_sent["wk"] = tag; meta["weekly_sent"] = tag
+    txt = weekly_report()
+    for a in [a for a in admins() if is_tg(a)]: send_text(a, txt)
+    meta.pop("wk", None); save_users()
+
 def _reminder_loop():
     while True:
         time.sleep(60)
@@ -903,6 +1008,8 @@ def _reminder_loop():
         except Exception as ex: print("summary error", ex, flush=True)
         try: selftest_daily()
         except Exception as ex: print("selftest error", ex, flush=True)
+        try: weekly_report_tick()
+        except Exception as ex: print("weekly report error", ex, flush=True)
         now = time.time()
         for to, u in list(USERS.items()):
             try:
@@ -1123,6 +1230,9 @@ def got_receipt(to, u, img, mime):
             i2, s2, m2 = extract_items(e_img, e_mime, with_store=True)
             if i2 and len(i2) > len(items or []): items, store_txt, meta = i2, s2 or store_txt, m2
     print("receipt:", len(items or []), "items", meta, flush=True)
+    wk_count("receipts")
+    if not items or meta.get("quality") == "bad": wk_count("r_bad")
+    elif meta.get("quality") == "partial": wk_count("r_partial")
     if not items:
         tip = ISSUE_TIP.get(meta.get("issue"), "נסו לצלם שוב – על משטח ישר, באור טוב, כשהקבלה ממלאת את המסך.")
         return send_text(to, "לא הצלחתי לקרוא את הקבלה 🙁\n" + tip + "\nאפשר גם פשוט לכתוב מה קניתם ✍️")
@@ -1152,6 +1262,7 @@ def got_receipt(to, u, img, mime):
 
 def got_items(to, u, items):
     found, missed = match_items(items)
+    wk_count("notfound", missed)
     if not found:
         return send_text(to, "לא מצאתי את המוצרים האלה במאגר 🙁 נסה לכתוב אותם קצת אחרת." + (f"\n({', '.join(missed[:8])})" if missed else ""))
     u["items"] = found; u["missed"] = missed[:8]
@@ -1315,6 +1426,8 @@ def handle(msg):
             send_text(to, "רשמתי אותך כמנהל הבוט 🔐 רק אתה תוכל לראות את הנתונים.")
         if to not in adm: return send_text(to, "לא הבנתי 🙂")
         return send_text(to, stats_text())
+    if text in ("/report", "דוח שבועי", "דוח") and to in admins():
+        track_stores(); return send_text(to, weekly_report())
     if text in ("/selftest", "בדיקה עצמית") and to in admins():
         typing(to); probs, summ = selftest()
         return send_text(to, ("✅ הבדיקה עברה – אותה רשימה, אותה תוצאה, כמויות תקינות" if not probs else
@@ -1589,6 +1702,22 @@ class H(BaseHTTPRequestHandler):
             print("bad payload", ex)
     def log_message(self, *a): pass
 
+_crash_sent = {}
+def crash_alert(m, ex, tb):
+    """תקלה אצל משתמש → הודעה מיידית למנהל: מה נשלח, איפה נשבר. אותה תקלה – פעם בחצי שעה לכל היותר."""
+    wk_count("errors")
+    fr = [f for f in tb if f.filename.endswith(("app.py", "kdata.py"))][-3:] or list(tb)[-2:]
+    where = " ← ".join(f"{os.path.basename(f.filename)}:{f.lineno} {f.name}" for f in reversed(fr))
+    sig = f"{type(ex).__name__}:{where}"
+    if time.time() - _crash_sent.get(sig, 0) < 1800: return
+    _crash_sent[sig] = time.time()
+    t = m.get("type"); body = {"text": lambda: m["text"]["body"], "interactive": lambda: "כפתור " + m["interactive"]["button_reply"]["id"],
+                               "location": lambda: "מיקום", "image": lambda: "תמונה (קבלה)", "voice": lambda: "הודעה קולית"}.get(t, lambda: t)()
+    u = USERS.get(m["from"], {})
+    msg = (f"🚨 *תקלה אצל משתמש*\n\n👤 ...{str(m['from'])[-4:]} (שלב: {u.get('step', '?')})\n💬 שלח: {str(body)[:200]}\n"
+           f"❌ {type(ex).__name__}: {str(ex)[:200]}\n📍 {where}\n\n_המשתמש קיבל \"אופס, משהו השתבש\". אפשר להעביר לי את ההודעה הזו לתיקון._")
+    for a in [a for a in admins() if is_tg(a)]: send_text(a, msg)
+
 def safe_handle(m):
     done = threading.Event()
     def keep_typing():   # בטלגרם "מקליד..." נעלם אחרי 5 שניות – מחדשים כל 4 שניות כל עוד עובדים
@@ -1602,6 +1731,8 @@ def safe_handle(m):
         import traceback; traceback.print_exc()
         try: send_text(m["from"], "אופס, משהו השתבש אצלי 🙈 נסה שוב בעוד רגע.")
         except Exception: pass
+        try: crash_alert(m, ex, traceback.extract_tb(ex.__traceback__))
+        except Exception as e2: print("crash alert failed", e2, flush=True)
     finally:
         done.set()
 

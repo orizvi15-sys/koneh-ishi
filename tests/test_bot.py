@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+"""שיחות מבחן אוטומטיות לבוט "קונה אישי".
+
+רץ לפני כל עדכון (GitHub Actions). אם בדיקה נכשלת – העדכון לא עולה לבוט.
+כל באג שנמצא בשטח → מוסיפים כאן בדיקה, כדי שלא יחזור.
+
+הרצה מקומית:  DATA_CACHE=/path/koneh-data.bin python3 tests/test_bot.py
+(בלי מפתחות אמיתיים: Claude מוחלף ב"Claude מזויף" שעונה תשובות קבועות, וכלום לא נשלח לטלגרם)
+"""
+import json, os, re, sys, tempfile, time, traceback
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+os.environ.update(DRY_RUN="1", TELEGRAM_TOKEN="test", DATA_URL="")
+os.environ.setdefault("DATA_CACHE", os.path.join(ROOT, "data", "koneh-data.bin"))
+for k in ("ANTHROPIC_API_KEY", "USERS_REPO", "USERS_TOKEN", "GROQ_API_KEY", "OPENAI_API_KEY", "ADMIN_CHAT"):
+    os.environ.pop(k, None)
+sys.path.insert(0, ROOT)
+
+import kdata
+kdata.load(False)
+if not kdata.D or kdata.D.source != "remote":
+    sys.exit("❌ אין קובץ נתונים ארצי (DATA_CACHE) – אי אפשר לבדוק")
+import app
+
+# ---------- סביבת בדיקה ----------
+app.USERS_PATH = os.path.join(tempfile.mkdtemp(), "users.json")
+app.push_users = lambda *a, **k: None
+OUT = []                                    # כל מה שהבוט "שלח"
+def fake_tg(method, payload):
+    if method in ("sendMessage", "editMessageText"): OUT.append(payload)
+    return {}
+app.tg_call = fake_tg
+app.graph_post = lambda *a, **k: {}
+
+ADMIN, USER = "tg:1000", "tg:2000"
+
+# ---------- Claude מזויף (בלי מפתח, תשובות צפויות) ----------
+RECEIPT_ITEMS = [{"name": "חלב 3% 1 ליטר", "qty": 2}, {"name": "לחם אחיד פרוס", "qty": 1}, {"name": "במבה", "qty": 3},
+                 {"name": "קוטג' 5%", "qty": 2}, {"name": "עגבנייה", "qty": 1.2}]
+def parse_line(line):
+    """פענוח פשוט של שורה ברשימה: 'מוצר – 2 חבילות' / 'נייר טואלט – 32 גלילים' (=חבילה אחת)"""
+    name, _, q = line.partition(" – "); q = q.strip()
+    m = re.match(r"(\d+(?:\.\d+)?)", q)
+    qty = float(m.group(1)) if m else 1
+    if q.startswith("חצי"): qty = 0.5
+    elif re.search(r"גרם", q) and m: qty = float(m.group(1)) / 1000
+    elif re.search(r"גלילים|יחידות|שישייה|רביעייה|שקיות\)", q): qty = 1
+    return {"name": name.strip(), "qty": qty}
+
+def fake_claude(prompt, image=None, mime=None, keep_dict=False):
+    if prompt.startswith("Match"): return None                      # בוחרים את התוצאה הראשונה בחיפוש
+    if prompt.startswith(app.RECEIPT_PROMPT[:40]):
+        if image: return {"store": "רמי לוי – סניף אופקים", "items": RECEIPT_ITEMS, "quality": "ok", "issue": ""}
+        text = prompt[len(app.RECEIPT_PROMPT):].strip()
+        return {"store": "", "items": [parse_line(l) for l in text.split("\n") if l.strip()], "quality": "ok", "issue": ""}
+    if "parse messages" in prompt:                                  # UNDERSTAND
+        msg = re.search(r"<<(.*)>>", prompt, re.S).group(1)
+        if msg.startswith("כמה עולה"): return {"intent": "price", "items": [{"name": msg[8:].strip(" ?"), "qty": 1}], "reply": ""}
+        if msg.startswith("תוסיף"): return {"intent": "add", "items": [{"name": msg[5:].strip(), "qty": 1}], "reply": ""}
+        if msg.startswith("תוריד"): return {"intent": "remove", "items": [{"name": msg[5:].strip(), "qty": 1}], "reply": ""}
+        if msg.startswith("קילו "): return {"intent": "list", "items": [{"name": msg[5:], "qty": 1}], "reply": ""}
+        if msg in ("תודה", "תודה רבה"): return {"intent": "chat", "items": [], "reply": "בכיף! 🙂"}
+        return {"intent": "list", "items": [{"name": x.strip(), "qty": 1} for x in msg.split(",")], "reply": ""}
+    return None
+app.claude_json = fake_claude
+app.CLAUDE_KEY = "test"
+app.download_media = lambda *a, **k: (b"\xff\xd8fakejpeg", "image/jpeg")
+for name in ("tg_download", "get_media", "fetch_media"):
+    if hasattr(app, name): setattr(app, name, lambda *a, **k: (b"\xff\xd8fakejpeg", "image/jpeg"))
+app.enhance = lambda img: (None, None)
+
+# ---------- כלים לשיחה ----------
+_n = [0]
+def _msg(to, **kw):
+    _n[0] += 1
+    return {"from": to, "id": f"t{_n[0]}", "name": "בדיקה", **kw}
+def send(to, text):  app.safe_handle(_msg(to, type="text", text={"body": text}))
+def press(to, bid):  app.safe_handle(_msg(to, type="interactive", interactive={"button_reply": {"id": bid}}))
+def loc(to, lat, lng): app.safe_handle(_msg(to, type="location", location={"latitude": lat, "longitude": lng}))
+def photo(to):       app.safe_handle(_msg(to, type="image", image={"id": "tg:fake"}))
+def voice(to):       app.safe_handle(_msg(to, type="voice", voice={"id": "tg:v", "sec": 5}))
+
+def texts(): return [o.get("text", "") for o in OUT]
+def last(): return OUT[-1].get("text", "") if OUT else ""
+def buttons():
+    b = []
+    for o in OUT:
+        for row in ((o.get("reply_markup") or {}).get("inline_keyboard") or []):
+            b += [x.get("callback_data") for x in row]
+    return b
+
+RESULTS = []
+def test(name):
+    def deco(fn):
+        OUT.clear(); app._crash_sent.clear()
+        try:
+            fn()
+            bad = [t for t in texts() if "משהו השתבש" in t or "Traceback" in t]
+            assert not bad, f"הבוט ענה 'אופס, משהו השתבש': {bad[0][:120]}"
+            RESULTS.append((True, name, ""))
+        except Exception as ex:
+            RESULTS.append((False, name, f"{type(ex).__name__}: {ex}\n" + "".join(traceback.format_tb(ex.__traceback__)[-2:])))
+        return fn
+    return deco
+
+def setup_user(to, lat=31.3155, lng=34.6210, clubs=None):
+    app.USERS[to] = {"step": "done", "prefs": {"home": [lat, lng], "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": clubs or []}, "hist": []}
+
+app.USERS.clear(); app.USERS["_meta"] = {"admins": [ADMIN]}
+
+# ================= הבדיקות =================
+@test("משתמש חדש: היי → מיקום → מועדון → מוכן לקנות")
+def _():
+    to = "tg:3001"
+    send(to, "היי"); assert "מאיפה יוצאים" in last(), last()
+    loc(to, 32.0809, 34.7806); assert "מועדון" in last(), last()
+    press(to, "clubyes"); press(to, "club:רמי לוי"); press(to, "clubdone")
+    assert "מה קונים" in last(), last()
+    assert app.USERS[to]["prefs"].get("clubs") == ["רמי לוי"]
+
+@test("משתמש חוזר: היי → אישור מיקום → סל שבועי")
+def _():
+    to = "tg:3002"; setup_user(to)
+    send(to, "היי"); assert "loc_ok" in buttons(), buttons()
+    press(to, "loc_ok"); assert "קונים" in last()
+    press(to, "weekly"); press(to, "hh34")
+    assert any("הסופר המנצח" in t for t in texts()), texts()[-2:]
+
+@test("רשימה בשורה אחת → המלצה על סופר")
+def _():
+    to = "tg:3003"; setup_user(to)
+    send(to, "חלב, לחם, במבה, קוטג'")
+    assert any("הסופר המנצח" in t for t in texts()), texts()
+
+@test("רשימה ארוכה: '32 גלילים' / '12 יחידות' = חבילה אחת (באג 11/10)")
+def _():
+    to = "tg:3004"; setup_user(to)
+    send(to, "חלב 3% – 2 קרטונים\nלחם אחיד – 1\nביצים L – 12 יחידות\nנייר טואלט – 32 גלילים\nבצל – 1 ק\"ג")
+    q = {x["src"].split()[0]: x["qty"] for x in app.USERS[to]["items"]}
+    assert q.get("נייר") == 1, q; assert q.get("ביצים") == 1, q; assert q.get("חלב") == 2, q
+
+@test("אותה רשימה פעמיים = אותו מחיר (באג 11/10)")
+def _():
+    to = "tg:3005"; setup_user(to); lst = "חלב 3% – 2 קרטונים\nלחם אחיד – 1\nנייר טואלט – 32 גלילים\nבמבה – 2 שקיות"
+    send(to, lst); a = app.USERS[to]["last"]["details"]
+    send(to, lst); b = app.USERS[to]["last"]["details"]
+    strip = lambda t: re.sub(r"_מחירים ומבצעים.*", "", t)
+    assert strip(a) == strip(b), (a, b)
+
+@test("מוצר בסיסי לא יוצא 'חסר' ברמי לוי אופקים (באג 11/10)")
+def _():
+    to = "tg:3006"; s0 = next(s for s in kdata.D.stores if s["n"] == "רמי לוי אופקים")
+    setup_user(to, *s0["p"]); app.USERS[to]["stores"] = {s0["key"]: 5}
+    send(to, "בצל – 1 ק\"ג\nתפוחי אדמה – 2 ק\"ג\nביצים M – 12 יחידות\nסוכר לבן – 1 ק\"ג\nאורז פרסי – 1 ק\"ג")
+    det = app.USERS[to]["last"]["details"]
+    for w in ("בצל", "תפוח אדמה", "ביצים"):
+        line = next((l for l in det.split("\n") if w in l), "")
+        assert line and "חסר בסניף" not in line, (w, det)
+
+@test("זיהוי בסיסי: 'בצל' → בצל יבש, 'ביצים M' → ביצים M")
+def _():
+    assert app.basic_alias("בצל") == "P10"; assert app.basic_alias("ביצים M 12 יחידות") == "E02"
+    assert app.basic_alias("עגבניות שרי") is None
+
+@test("שגיאת כתיב בחיפוש: 'חלן' → חלב, 'במבע' → במבה")
+def _():
+    assert "חלב" in kdata.D.items[kdata.D.search("חלן 3%")[0]][1]
+    assert "במבה" in kdata.D.items[kdata.D.search("במבע")[0]][1]
+
+@test("טקסט חופשי: 'קילו חזה עוף', 'כמה עולה במבה?', תוסיף/תוריד, תודה")
+def _():
+    to = "tg:3007"; setup_user(to)
+    send(to, "קילו חזה עוף"); assert any("הסופר המנצח" in t for t in texts())
+    send(to, "כמה עולה במבה?"); assert "₪" in last(), last()
+    send(to, "תוסיף חלב"); assert any(x["name"].startswith("חלב") or "חלב" in x["name"] for x in app.USERS[to]["items"])
+    send(to, "תוריד חלב"); assert not any("חלב" in x["name"] for x in app.USERS[to]["items"])
+    send(to, "תודה"); assert "בכיף" in last()
+
+@test("מוצר כללי ('בשר') → שואל איזה סוג")
+def _():
+    to = "tg:3008"; setup_user(to)
+    send(to, "בשר, חלב"); assert "איזה בשר" in last(), last()
+    press(to, "v:0"); assert any("הסופר המנצח" in t for t in texts())
+
+@test("קבלה מצולמת → המלצה, 'מה זיהיתי', 'סופרים אחרים', תיקון")
+def _():
+    to = "tg:3009"; setup_user(to)
+    photo(to); assert any("מחיר הסל" in t for t in texts()), texts()
+    press(to, "seen"); assert "₪" in last()
+    press(to, "oth"); assert "סופרים" in last()
+    press(to, "fix"); assert "לתקן" in last()
+
+@test("הודעה קולית בלי מפתח → הסבר ידידותי")
+def _():
+    to = "tg:3010"; setup_user(to); voice(to); assert "קוליות" in last() or "הקלטה" in last(), last()
+
+@test("תפריט הגדרות: כל כפתור עונה")
+def _():
+    to = "tg:3011"; setup_user(to); send(to, "חלב, לחם")
+    send(to, "הגדרות"); assert "מה תרצה לעשות" in last()
+    for b in ("set:loc", "set:club", "clubdone", "set:store", "st:none", "set:remind", "set:remind", "set:sav", "set:help", "set:faq"):
+        n = len(OUT); press(to, b); assert len(OUT) > n, f"אין תשובה ל-{b}"
+    for j in range(len(app.faq_answer(None))):
+        n = len(OUT); press(to, f"set:faq{j}"); assert len(OUT) > n and "₪" not in "", f"אין תשובה לשאלה {j}"
+    press(to, "set:reset"); assert "בטוח" in last(); press(to, "reset_no"); assert "בוטל" in last()
+
+@test("שאלה 'האם כל הרשתות מופיעות' מונה רשתות וסניפים")
+def _():
+    q, a = app.faq_answer(1); assert "רשתות" in a and "סניפים" in a, a
+
+@test("פקודות: כמה חסכתי, איפוס מלא, פקודה עם שגיאת כתיב, מחק אותי")
+def _():
+    to = "tg:3012"; setup_user(to); send(to, "חלב, לחם")
+    send(to, "כמה חסכתי"); assert "חיסכון" in last() or "חסכ" in last(), last()
+    send(to, "איפןס מלא"); assert "מאיפה יוצאים" in last(), last()
+    assert app.USERS[to]["hist"] == []
+    send(to, "מחק אותי"); assert to not in app.USERS
+
+@test("מנהל: /stats, בדיקה עצמית, דוח שבועי (באג 11/10: בדיקה עצמית קרסה)")
+def _():
+    setup_user(ADMIN)
+    send(ADMIN, "/stats"); assert "לוח בקרה" in last(), last()
+    send(ADMIN, "בדיקה עצמית"); assert "🧪" in last(), last()
+    send(ADMIN, "דוח שבועי"); assert "דוח שבועי" in last() and "מצב הרשתות" in last(), last()
+
+@test("משתמש רגיל לא מקבל פקודות מנהל")
+def _():
+    to = "tg:3013"; setup_user(to)
+    send(to, "דוח שבועי"); assert "מצב הרשתות" not in last()
+
+@test("תקלה אצל משתמש → המנהל מקבל התראה עם הפרטים (פעם אחת)")
+def _():
+    to = "tg:3014"; setup_user(to)
+    orig = app.handle
+    def boom(m): raise ValueError("בדיקה")
+    app.handle = boom
+    try:
+        app.safe_handle(_msg(to, type="text", text={"body": "חלב"}))
+        app.safe_handle(_msg(to, type="text", text={"body": "חלב"}))
+    finally:
+        app.handle = orig
+    alerts = [o for o in OUT if o["chat_id"] == ADMIN[3:] and "תקלה אצל משתמש" in o["text"]]
+    assert len(alerts) == 1, len(alerts)
+    assert "חלב" in alerts[0]["text"] and "ValueError" in alerts[0]["text"]
+    OUT.clear()                                          # ה"אופס" כאן מכוון – לא נכשלים עליו
+
+@test("בדיקה יומית: רשימה תקינה עוברת, ×32 נתפס")
+def _():
+    probs, summ = app.selftest()
+    assert not [p for p in probs if "נקרא" in p or "שונה" in p], probs
+    orig = app.claude_json; cnt = [0]
+    def bad(prompt, image=None, mime=None, keep_dict=False):
+        r = orig(prompt, image, mime, keep_dict)
+        if isinstance(r, dict) and "items" in r and prompt.startswith(app.RECEIPT_PROMPT[:40]):
+            cnt[0] += 1
+            if cnt[0] == 2: r["items"] = [dict(x, qty=32) if x["name"].startswith("נייר") else x for x in r["items"]]
+        return r
+    app.claude_json = bad
+    try: probs, _s = app.selftest()
+    finally: app.claude_json = orig
+    assert any("×32" in p for p in probs), probs
+
+@test("כל ההודעות קצרות מספיק לטלגרם (עד 4096 תווים)")
+def _():
+    to = "tg:3015"; setup_user(to)
+    send(to, "\n".join(f"{x} – 1" for x in ["חלב", "לחם", "ביצים", "קוטג'", "גבינה צהובה", "יוגורט", "חמאה", "עגבנייה", "מלפפון", "בצל",
+                                            "תפוח אדמה", "גזר", "בננה", "אורז", "פסטה", "שמן", "סוכר", "קמח", "במבה", "ביסלי", "קולה",
+                                            "מים", "נייר טואלט", "סבון כלים", "חזה עוף", "טונה", "חומוס", "טחינה", "קפה", "תה"]))
+    press(to, "seen"); press(to, "oth")
+    long = [len(t) for t in texts() if len(t) > 4096]
+    assert not long, long
+
+# ---------- סיכום ----------
+ok = sum(1 for r in RESULTS if r[0])
+for passed, name, err in RESULTS:
+    print(("✅ " if passed else "❌ ") + name)
+    if not passed: print("   " + err.replace("\n", "\n   "))
+print(f"\n{ok}/{len(RESULTS)} בדיקות עברו")
+sys.exit(0 if ok == len(RESULTS) else 1)
