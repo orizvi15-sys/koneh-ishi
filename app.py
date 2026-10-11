@@ -777,8 +777,11 @@ def handle(msg):
         pr.setdefault("hh", reply); f = HH[reply]
         u["items"] = weekly_items(f)
         send_text(to, f"הכנתי סל שבועי רגיל: {len(u['items'])} מוצרים (חלב, לחם, גבינות, ירקות, פירות ועוד)."); return finish(to, u)
-    if reply in ("addf", "noadd") and u["step"] == "forgot":
-        if reply == "addf": u["items"] += [{k: x.get(k, "") for k in ("src", "code", "name", "qty")} for x in u.pop("pending", [])]
+    if reply in ("addf", "noadd"):   # לא תלוי ב-step – כדי שלחיצה לא "תיתקע" (למשל אם השרת עלה מחדש באמצע)
+        pend = u.pop("pending", [])
+        if reply == "addf": u.setdefault("items", []).extend({k: x.get(k, "") for k in ("src", "code", "name", "qty")} for x in pend)
+        if not u.get("items"): return send_text(to, "אין כרגע סל – כתבו *היי* כדי להתחיל 🙂")
+        typing(to)
         return finish(to, u)
 
     if t == "image":
@@ -807,6 +810,7 @@ def handle(msg):
         if CLAUDE_KEY and (text.count("\n") >= 3 or re.search(r"\d+\.\d{2}", text)):
             items = extract_items(text=text)  # רשימה ארוכה / קבלה מועתקת – Claude מסדר אותה
         return got_items(to, u, items or parse_list(text))
+    if reply: print("unhandled button", reply, "step", u.get("step"), flush=True)
     send_text(to, "לא הבנתי 🙂 אפשר לשלוח רשימה, קבלה, או לכתוב *הגדרות*.")
 
 
