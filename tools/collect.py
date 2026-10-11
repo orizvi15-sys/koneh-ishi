@@ -409,6 +409,27 @@ def write_status(outdir, chain, **kw):
               open(os.path.join(outdir, f"status-{chain}.json"), "w", encoding="utf-8"), ensure_ascii=False)
 
 
+def carry_over(data, prev_path, max_age_h=30):
+    """סניף שהפעם לא הורד (תקלה זמנית אצל הרשת) – שומרים את המחירים מההרצה הקודמת אם הם מ-30 השעות האחרונות"""
+    if not prev_path or not os.path.exists(prev_path): return
+    try: prev = json.load(gzip.open(prev_path, "rt", encoding="utf-8"))
+    except Exception as ex: print("prev file unreadable", ex); return
+    lim = (datetime.now(IL) - timedelta(hours=max_age_h)).strftime("%Y%m%d%H%M")
+    n = 0
+    for k, v in prev.get("prices", {}).items():
+        if k in data["prices"]: continue
+        ts = (prev.get("stores", {}).get(k, {}).get("ts") or "")[:12].ljust(12, "0")
+        if ts < lim: continue
+        data["prices"][k] = v; data["stores"][k] = prev["stores"][k]; n += 1
+        for part in ("promo", "club"):
+            if k in prev.get(part, {}): data.setdefault(part, {})[k] = prev[part][k]
+        for code in v:
+            if code not in data["names"] and code in prev.get("names", {}): data["names"][code] = prev["names"][code]
+    if n:
+        print(f"carried over {n} stores from the previous run", flush=True)
+        data["stats"]["carried_over"] = n
+
+
 def main():
     if sys.argv[1] == "--status-only":  # הסקריפט קרס – לפחות לרשום שנכשל
         write_status(sys.argv[3], sys.argv[2], ok=False, reason="הסקריפט קרס – ראו לוג ההרצה", files=0)
@@ -441,6 +462,7 @@ def main():
                  errors=(errs.msgs[-6:] if errs else []), **st)
     if not data["prices"]:
         print("no prices – not writing output"); sys.exit(0)
+    carry_over(data, os.environ.get("PREV_CHAIN_FILE", ""))
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     with gzip.open(out, "wt", encoding="utf-8") as f: json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
     print("wrote", out, os.path.getsize(out))

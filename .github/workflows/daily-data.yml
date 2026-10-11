@@ -45,7 +45,11 @@ jobs:
         run: |
           pip install -q "git+https://github.com/OpenIsraeliSupermarkets/israeli-supermarket-scarpers.git"
           python -m playwright install --with-deps chromium >/dev/null 2>&1 || true
+      - name: Previous file of this chain (to keep stores that fail to download this time)
+        run: gh release download "$REL" -p "chain-${{ matrix.chain }}.json.gz" -D prev -R "$GITHUB_REPOSITORY" || true
       - name: Download and process ${{ matrix.chain }}
+        env:
+          PREV_CHAIN_FILE: prev/chain-${{ matrix.chain }}.json.gz
         run: python tools/collect.py ${{ matrix.chain }} out || python tools/collect.py --status-only ${{ matrix.chain }} out
       - name: Upload to release
         if: always()
