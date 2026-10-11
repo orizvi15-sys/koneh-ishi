@@ -158,6 +158,16 @@ def _():
         line = next((l for l in det.split("\n") if w in l), "")
         assert line and "חסר בסניף" not in line, (w, det)
 
+@test("שמות מקבלה עם קיצורים (ק', גר', ל') נמצאים במאגר (באג 12/10: 8 מוצרים 'לא נמצאו')")
+def _():
+    names = ["עגבניות 1 ק'", "גבינה צהובה 250 גר'", "פילה סלמון קפוא 500 גר'", "רוטב עגבניות 700 גר'", "נוזל כביסה 1.5 ל'", "מלפפונים 1 ק'"]
+    found, missed = app.match_items([{"name": n, "qty": 1} for n in names])
+    assert not missed, missed
+    got = {f["src"]: f["name"] for f in found}
+    assert got["עגבניות 1 ק'"].startswith("עגבנייה"), got
+    assert "צהובה" in got["גבינה צהובה 250 גר'"], got
+    assert got["מלפפונים 1 ק'"].startswith("מלפפון ("), got
+
 @test("זיהוי בסיסי: 'בצל' → בצל יבש, 'ביצים M' → ביצים M")
 def _():
     assert app.basic_alias("בצל") == "P10"; assert app.basic_alias("ביצים M 12 יחידות") == "E02"

@@ -337,12 +337,18 @@ BASIC_ALIAS = {"בצל": "P10", "בצלים": "P10", "בצל יבש": "P10", "ת
                "קישואים": "P18", "חציל": "P17", "חצילים": "P17", "כרובית": "P21", "תפוח עץ": "P30", "תפוחים": "P30", "תפוחי עץ": "P30"}
 
 def basic_alias(name):
-    n = re.sub(r'(\d+(\.\d+)?|ק"ג|קג|קילו|גרם|יחידות|יח\'?|תבנית|ארוז(ה|ים)?|טרי(ים|יה|ה)?|רגיל(ה|ים)?|[–\-:,()])', " ", name)
+    n = re.sub(r'(\d+(\.\d+)?|ק"ג|קג|קילו|ק\'|גרם|גר\'?|יחידות|יח\'?|תבנית|ארוז(ה|ים)?|טרי(ים|יה|ה)?|רגיל(ה|ים)?|[–\-:,()])', " ", name)
     return BASIC_ALIAS.get(" ".join(n.split()))
 
 def match_items(items):
     d = kdata.D
-    cand = [d.search(it["name"]) for it in items]
+    def cands(name):
+        c = d.search(name)
+        t = kdata.toks(name)
+        if len(t) > 1:                                   # "חטיף ברנפלקס" – גם בלי המילה הכללית הראשונה
+            c += [j for j in d.search(" ".join(t[1:]), 3) if j not in c]
+        return c
+    cand = [cands(it["name"]) for it in items]
     for k, it in enumerate(items):
         a = d.code2i.get(basic_alias(it["name"]) or "")
         if a is not None: cand[k] = [a]                 # אין מה לבחור – זה הפריט הרגיל
