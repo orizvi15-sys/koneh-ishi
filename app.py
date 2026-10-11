@@ -784,7 +784,9 @@ def handle(msg):
     if text in ("אבחון מחדש", "אבחון", "איפוס", "איפוס מלא"):
         full = text == "איפוס מלא"
         u["prefs"] = {}; u.pop("remind_at", None); u.pop("items", None); u.pop("last", None)
-        if full: u["hist"] = []; u.pop("receipts", None); u.pop("last_receipt", None)
+        if full:
+            u["hist"] = []
+            for k in ("receipts", "last_receipt", "stores", "rbuf_t", "note", "cam_tip", "missed", "pending"): u.pop(k, None)
         save_users()
         return ask(to, "loc", u, intro=("🔄 " if not full else "🔄🧹 ") + welcome(u) + "\n\n")
     if text == "מחק אותי":
