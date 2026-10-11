@@ -355,9 +355,9 @@ def load_cities(path="tools/cities.json"):
     except Exception: return {}
 
 
-def _scrape_once(chain, dump, when=None):
+def _scrape_once(chain, dump, when=None, types=("STORE_FILE", "PRICE_FULL_FILE", "PROMO_FULL_FILE"), regex=None):
     from il_supermarket_scarper import ScarpingTask
-    t = ScarpingTask(enabled_scrapers=[chain], files_types=["STORE_FILE", "PRICE_FULL_FILE", "PROMO_FULL_FILE"],
+    t = ScarpingTask(enabled_scrapers=[chain], files_types=list(types), file_name_regex=regex,
                      multiprocessing=1, timeout_in_seconds=55 * 60,
                      output_configuration={"output_mode": "disk", "base_storage_path": dump},
                      status_configuration={"database_type": "json", "base_path": dump + "/status"})
@@ -430,7 +430,78 @@ def carry_over(data, prev_path, max_age_h=30):
         data["stats"]["carried_over"] = n
 
 
+# ---------- עדכון שעתי (קבצי שינויים בלבד) ----------
+def _ts12(t): return re.sub(r"\D", "", t or "")[:12].ljust(12, "0")
+
+def apply_delta(prev, files, now):
+    """מעדכן קובץ רשת קיים לפי קבצי השינויים (Price/Promo) שפורסמו מאז – מוצרים עם ברקוד בלבד"""
+    def kind(f):
+        b = os.path.basename(f).lower()
+        if "full" in b: return ""
+        return "promo" if "promo" in b else ("price" if "price" in b else "")
+    upd = stores_upd = promo_n = 0
+    for f in sorted((f for f in files if kind(f) == "price"), key=file_ts):
+        try: cid, sid, items = parse_prices(parse_xml(read_any(f)), f)
+        except Exception as ex: print("delta price parse error", f, ex); continue
+        key = f"{cid}-{sid}"
+        if key not in prev["prices"] or not items: continue
+        ts = file_ts(f)
+        if _ts12(ts) <= _ts12(prev["stores"].get(key, {}).get("ts")): continue
+        row = prev["prices"][key]
+        for code, it in items.items():
+            if not is_barcode(code, it): continue
+            if row.get(code) != it["price"]: row[code] = it["price"]; upd += 1
+            if code not in prev["names"] and it["name"]: prev["names"][code] = it["name"]
+        prev["stores"][key]["ts"] = ts; stores_upd += 1
+    for f in sorted((f for f in files if kind(f) == "promo"), key=file_ts):
+        try:
+            root = parse_xml(read_any(f))
+            key = f"{deep(root, 'chainid')}-{norm_id(deep(root, 'storeid'))}"
+            if key not in prev["prices"]: continue
+            items = {c: {"price": p, "w": False} for c, p in prev["prices"][key].items() if c[:1].isdigit()}
+            promo_n += apply_promos(root, items, now)
+            for c, it in items.items():
+                if it.get("best") is not None:
+                    old = prev.setdefault("promo", {}).setdefault(key, {}).get(c)
+                    if not old or it["best"] < old[0]: prev["promo"][key][c] = [it["best"], it["best_end"]]
+                if it.get("club") is not None:
+                    old = prev.setdefault("club", {}).setdefault(key, {}).get(c)
+                    if not old or it["club"] < old[0]: prev["club"][key][c] = [it["club"], it["club_end"]]
+        except Exception as ex:
+            print("delta promo parse error", f, ex)
+    prev["fetched"] = datetime.now(IL).isoformat(timespec="minutes")
+    prev.setdefault("stats", {})["delta"] = {"files": len(files), "prices_changed": upd, "stores_updated": stores_upd, "promo_hits": promo_n}
+    return upd, stores_upd, promo_n
+
+
+def delta_main(chain, outdir):
+    prev_path = os.environ.get("PREV_CHAIN_FILE", "")
+    if not prev_path or not os.path.exists(prev_path):
+        print("no previous chain file – skipping delta"); return
+    prev = json.load(gzip.open(prev_path, "rt", encoding="utf-8"))
+    since = datetime.fromisoformat(prev["fetched"]).astimezone(IL).replace(tzinfo=None) - timedelta(hours=1)
+    now = datetime.now(IL).replace(tzinfo=None)
+    since = max(since, now - timedelta(hours=8))
+    hours, t = [], since.replace(minute=0, second=0, microsecond=0)
+    while t <= now: hours.append(t.strftime("%Y%m%d%H")); t += timedelta(hours=1)
+    regex = "(" + "|".join(hours) + ")"
+    files = []
+    for name in [chain] + FALLBACKS.get(chain, []):
+        dump = os.path.abspath(f"dumps/{name}")
+        try: _scrape_once(name, dump, types=("PRICE_FILE", "PROMO_FILE"), regex=regex)
+        except Exception as ex: print("delta scrape error", name, ex)
+        files = _files(dump)
+        if files: break
+    upd, su, pn = apply_delta(prev, files, now)
+    print(f"{chain} delta: {len(files)} files, {upd} prices changed in {su} stores, {pn} promo hits", flush=True)
+    out = os.path.join(outdir, f"chain-{chain}.json.gz")
+    os.makedirs(outdir, exist_ok=True)
+    with gzip.open(out, "wt", encoding="utf-8") as f: json.dump(prev, f, ensure_ascii=False, separators=(",", ":"))
+
+
 def main():
+    if sys.argv[1] == "--delta":
+        return delta_main(sys.argv[2], sys.argv[3])
     if sys.argv[1] == "--status-only":  # הסקריפט קרס – לפחות לרשום שנכשל
         write_status(sys.argv[3], sys.argv[2], ok=False, reason="הסקריפט קרס – ראו לוג ההרצה", files=0)
         return

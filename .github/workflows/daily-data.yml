@@ -1,8 +1,8 @@
-# הורדת מחירים ומבצעים מכל הרשתות כל 4 שעות: 03,07,11,15,19,23 (שעון קיץ; שעה פחות בשעון חורף)
+# עדכון מחירים: כל 4 שעות הורדה מלאה (03,07,11,15,19,23 בשעון קיץ), ובכל שאר השעות – רק קבצי השינויים מאז העדכון הקודם
 name: daily-data
 on:
   schedule:
-    - cron: "0 0,4,8,12,16,20 * * *"
+    - cron: "0 * * * *"
   workflow_dispatch:
   push:
     paths: [".github/run-daily-data"]   # עדכון הקובץ הזה מפעיל הרצה מיידית
@@ -50,7 +50,14 @@ jobs:
       - name: Download and process ${{ matrix.chain }}
         env:
           PREV_CHAIN_FILE: prev/chain-${{ matrix.chain }}.json.gz
-        run: python tools/collect.py ${{ matrix.chain }} out || python tools/collect.py --status-only ${{ matrix.chain }} out
+          EVENT: ${{ github.event_name }}
+        run: |
+          H=$(date -u +%H)
+          if [ "$EVENT" = "schedule" ] && [ $((10#$H % 4)) -ne 0 ]; then
+            echo "hourly delta update"; python tools/collect.py --delta ${{ matrix.chain }} out || true
+          else
+            python tools/collect.py ${{ matrix.chain }} out || python tools/collect.py --status-only ${{ matrix.chain }} out
+          fi
       - name: Upload to release
         if: always()
         run: |
