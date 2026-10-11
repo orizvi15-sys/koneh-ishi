@@ -763,6 +763,73 @@ def watchdog():
     for k in [k for k, t in sent.items() if time.time() - t > 3 * 86400]: sent.pop(k)
     save_users()
 
+# ---------- בדיקה עצמית יומית: אותה רשימה פעמיים → אותה תוצאה, כמויות הגיוניות ----------
+SELFTEST_LIST = """חלב 3% – 4 קרטונים
+לחם אחיד פרוס – 2
+ביצים L – 12 יחידות
+קוטג' 5% – 3
+גבינה צהובה – 1 חבילה
+עגבניות – 2 ק"ג
+מלפפונים – 1.5 ק"ג
+בצל – 1 ק"ג
+אורז פרסי – 1 ק"ג
+פסטה ספגטי – 3 חבילות
+שמן קנולה – 1 בקבוק
+סוכר לבן – 1 ק"ג
+במבה – 2 שקיות
+ביסלי – 2 שקיות
+קוקה קולה 1.5 ליטר – 2 בקבוקים
+מים מינרליים – שישייה
+נייר טואלט – 32 גלילים
+סבון כלים – 1 בקבוק"""
+# כמה צריך לצאת לכל שורה (מוצרים ארוזים = מספר חבילות)
+SELFTEST_QTY = {"חלב": 4, "לחם": 2, "ביצים": 1, "קוטג": 3, "גבינה צהובה": 1, "פסטה": 3, "שמן": 1, "סוכר": 1,
+                "במבה": 2, "ביסלי": 2, "קוקה קולה": 2, "מים": 1, "נייר טואלט": 1, "סבון כלים": 1}
+SELFTEST_HOME = [31.4215, 34.5925]   # נתיבות
+_selftest = {"day": ""}
+
+def selftest():
+    """מחזיר (רשימת בעיות, שורת סיכום)"""
+    D = kdata.D; probs = []; runs = []
+    if not D or not CLAUDE_KEY: return ["אין נתונים / אין מפתח Claude – לא בדקתי"], ""
+    for k in range(2):
+        its = extract_items(text=SELFTEST_LIST) or []
+        if not its: probs.append(f"ריצה {k + 1}: לא הצלחתי לקרוא את רשימת הבדיקה"); continue
+        for key, want in SELFTEST_QTY.items():
+            x = next((x for x in its if x["name"].replace("'", "").startswith(key.replace("'", ""))), None)
+            if x is None: probs.append(f"ריצה {k + 1}: לא זוהה \"{key}\"")
+            elif abs(x["qty"] - want) > 0.01: probs.append(f"ריצה {k + 1}: \"{x['name']}\" נקרא ×{x['qty']:g} במקום ×{want:g}")
+        found, missed = match_items(its)
+        fu = {"prefs": {"home": SELFTEST_HOME, "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "items": found, "hist": []}
+        r = compute(fu)
+        if not isinstance(r, dict): probs.append(f"ריצה {k + 1}: החישוב נכשל"); continue
+        tot = sum(v[0] for v in r["ip"].values())
+        for it in found:
+            c = r["ip"].get(it.get("code", ""), [0])[0]
+            if c > 150: probs.append(f"ריצה {k + 1}: שורה יקרה חשודה – {it['name']} ×{it['qty']:g} = ₪{c:.0f}")
+        runs.append((sorted((x["name"], x["qty"]) for x in its), r["store"], tot, len(found), len(missed)))
+    if len(runs) == 2:
+        (a, sa, ta, *_), (b, sb, tb, *_) = runs
+        if a != b: probs.append("אותה רשימה נקראה אחרת בשתי הריצות: " + ", ".join(f"{n} ×{q:g}" for n, q in sorted(set(a) ^ set(b)))[:400])
+        if abs(ta - tb) > 0.03 * max(ta, tb): probs.append(f"מחיר שונה בין הריצות: ₪{ta:.0f} מול ₪{tb:.0f}")
+    summ = (f"🧪 בדיקה עצמית: {runs[0][3]} מוצרים זוהו, הכי זול {runs[0][1]} ₪{runs[0][2]:.0f}"
+            + (f" / ₪{runs[1][2]:.0f}" if len(runs) > 1 else "")) if runs else ""
+    probs = list(dict.fromkeys(probs))
+    return probs, summ
+
+def selftest_daily():
+    il = time.gmtime(time.time() + 3 * 3600)
+    day = time.strftime("%Y-%m-%d", il)
+    if il.tm_hour < 9 or _selftest["day"] == day: return      # פעם ביום, אחרי 09:00
+    meta = USERS.setdefault("_meta", {})
+    if meta.get("selftest_day") == day: _selftest["day"] = day; return
+    _selftest["day"] = day; meta["selftest_day"] = day; save_users()
+    probs, summ = selftest()
+    print("selftest", summ, probs, flush=True)
+    if probs:
+        for a in [a for a in admins() if is_tg(a)]:
+            send_text(a, "🧪 *בדיקה יומית – נמצאה בעיה*\n\n" + "\n".join("⚠️ " + p for p in probs[:12]) + ("\n\n" + summ if summ else ""))
+
 def _reminder_loop():
     while True:
         time.sleep(60)
@@ -770,6 +837,8 @@ def _reminder_loop():
         except Exception as ex: print("watchdog error", ex, flush=True)
         try: monthly_summaries()
         except Exception as ex: print("summary error", ex, flush=True)
+        try: selftest_daily()
+        except Exception as ex: print("selftest error", ex, flush=True)
         now = time.time()
         for to, u in list(USERS.items()):
             try:
@@ -1181,6 +1250,10 @@ def handle(msg):
             send_text(to, "רשמתי אותך כמנהל הבוט 🔐 רק אתה תוכל לראות את הנתונים.")
         if to not in admins: return send_text(to, "לא הבנתי 🙂")
         return send_text(to, stats_text())
+    if text in ("/selftest", "בדיקה עצמית") and to in admins():
+        typing(to); probs, summ = selftest()
+        return send_text(to, ("✅ הבדיקה עברה – אותה רשימה, אותה תוצאה, כמויות תקינות" if not probs else
+                              "🧪 *נמצאה בעיה*\n\n" + "\n".join("⚠️ " + p for p in probs[:12])) + ("\n\n" + summ if summ else ""))
     if text in ("אבחון מחדש", "אבחון", "איפוס", "איפוס מלא"):
         full = text == "איפוס מלא"
         u["prefs"] = {}; u.pop("remind_at", None); u.pop("items", None); u.pop("last", None)
