@@ -60,6 +60,19 @@ def edit1(a, b):
     return a[i:] == b[i + 1:]
 
 
+FB_SKIP = ("מטוג", "קפוא", "מרוסק", "חתוכ", "כבוש", "מבושל", "מיובש", "צלוי", "אפוי", "ממולא", "מקולף", "טחון", "רסק",
+           "פיקנטי", "חריף", "גמדי", "שאלוט", "ירוק", "שרי", "כסביה", "ארגני", "אורגני")
+FB_NEUTRAL = {"פרימיום", "ישראלי", "ישראלית", "בקרטון", "ארוז", "ארוזה", "ארוזים", "טרי", "טריה", "טרייה", "טריים", "לבן", "לבנה",
+              "רגיל", "רגילה", "מובחר", "מובחרת", "סוג", "א", "שקית", "במשקל", "משקל", "תפזורת", "יבש", "L", "M", "XL", "S",
+              "לק\"ג", "לקג", "ק\"ג", "קג", "יח'", "יח", "יחידות"}
+FB_NEUTRAL_S = set()
+FB_VARIANT = ("בטעם", "טעם", "חמוץ", "חריף", "ממולא", "נוגט", "דיאט", "זירו", "לייט", "ללא", "נטול", "דל ", "מועשר", "אורגני",
+              "מאנצ", "שוקולד", "וניל", "תות", "פיקנטי", "מעושן", "קפוא", "עיזים", "מקורמל", "סויה", "שקדים", "שיבולת",
+              "פחי", "שויצרי", "גבינה")
+FB_SYN = {"סבון כלים": "נוזל כלים", "נוזל כלים": "סבון כלים", "מגבות נייר": "נייר מגבת", "נייר מגבת": "מגבות נייר",
+          "נוזל כביסה": "ג'ל כביסה", "ג'ל כביסה": "נוזל כביסה", "קוקה קולה": "קוקה-קולה"}
+UNIT_WORDS = {"ק\"ג", "קג", "קילו", "גרם", "גר", "ליטר", "מ\"ל", "מל", "יח", "יחידות", "ארוז", "ארוזה", "פרוס", "פרוסה"}
+
 class Prices(dict):
     """מילון מחירים של סניף + מבצעי כמות"""
     def __init__(self, *a):
@@ -150,13 +163,13 @@ class Data:
         if c != -1: return c
         c = parse_size(self.items[i][1]); self._size[i] = c; return c
 
-    def group(self, i, query=None, n=30):
+    def group(self, i, query=None, n=30, tol=0.12):
         """מוצרים שקולים: אותו סוג ואותו גודל (±12%), לפי מילות החיפוש. משמש להשוואת 'הכי זול מאותו סוג'."""
         code = self.items[i][0]
         if not code[:1].isdigit(): return [i]          # ירקות/ביצים – כבר מאוחדים
         q = [stem(w) for w in toks(query or self.items[i][1])]
         if not q: return [i]
-        key = (i, tuple(q))
+        key = (i, tuple(q), tol)
         if key in self._groups: return self._groups[key]
         s0 = self.size(i)
         out = [i]
@@ -168,11 +181,50 @@ class Data:
             s1 = self.size(j)
             if s0 is None or s1 is None:
                 if s0 != s1: continue
-            elif abs(s1 - s0) > 0.12 * s0: continue
+            elif abs(s1 - s0) > tol * s0: continue
             out.append(j)
             if len(out) >= n: break
         self._groups[key] = out
         return out
+
+    def fallback(self, i, query=None):
+        """חלופות כשבסניף אין את המוצר עצמו: אותו מוצר בסיסי בשם/מותג/אריזה אחרים.
+        ירקות/ביצים: פריט שקיל אחר עם אותן מילים בדיוק (+ מילים ניטרליות כמו "פרימיום", "ישראלי").
+        ארוזים: אותו סוג מוצר (2 המילים הראשונות), גודל ±25%, בלי טעמים/גרסאות מיוחדות."""
+        key = ("fb", i, query)
+        if key in self._groups: return self._groups[key]
+        code, name = self.items[i][0], self.items[i][1]
+        if not FB_NEUTRAL_S: FB_NEUTRAL_S.update(stem(w) for w in FB_NEUTRAL)
+        core = lambda t: {stem(w) for w in toks(t) if not w[:1].isdigit() and w not in FB_NEUTRAL and stem(w) not in FB_NEUTRAL_S}
+        out = []
+        if not code[:1].isdigit():
+            mine = core(name)
+            if mine:
+                for j in self._unified():
+                    if j == i or self.meta(j)[0] != self.meta(i)[0]: continue
+                    if core(self.items[j][1]) == mine: out.append(j)
+        else:
+            words = [w for w in toks(query or name) if w not in UNIT_WORDS and not re.fullmatch(r"[\d.,*xX]+", w)][:2]
+            if words:
+                have = name + " " + (query or "")
+                pct = set(re.findall(r"(\d+(?:\.\d+)?)\s*%", query or name))
+                base = set(self.group(i, query))
+                cands = self.group(i, " ".join(words), n=40, tol=0.25)
+                alt = FB_SYN.get(" ".join(words))
+                if alt: cands = cands + self.group(i, alt, n=40, tol=0.25)      # "סבון כלים" = "נוזל כלים"
+                for j in dict.fromkeys(cands):
+                    if j in base: continue
+                    nm = self.items[j][1]
+                    if any(f in nm and f not in have for f in FB_VARIANT): continue
+                    if pct and not pct <= set(re.findall(r"(\d+(?:\.\d+)?)\s*%", nm)): continue   # חלב 3% ≠ 1%
+                    out.append(j)
+        self._groups[key] = out
+        return out
+
+    def _unified(self):
+        u = getattr(self, "_uni", None)
+        if u is None: u = self._uni = [j for j, it in enumerate(self.items) if not it[0][:1].isdigit()]
+        return u
 
     def fix_word(self, w):
         """תיקון שגיאת כתיב קלה במילה שלא קיימת במאגר ("במבע"→"במבה", "חלן"→"חלב"): המילה הכי נפוצה שרחוקה באות אחת"""

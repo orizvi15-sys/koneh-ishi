@@ -329,9 +329,23 @@ def item_of(d, i, qty, src=None):
     c, n = d.items[i][0], d.items[i][1]
     return {"src": src or n, "code": c, "name": n, "qty": qty}
 
+# מוצרים בסיסיים בשם כללי ("בצל", "ביצים") → תמיד הפריט הרגיל והמאוחד (לא בצל אדום / מותג מסוים)
+BASIC_ALIAS = {"בצל": "P10", "בצלים": "P10", "בצל יבש": "P10", "תפוח אדמה": "P12", "תפוחי אדמה": "P12", "עגבניה": "P01",
+               "עגבנייה": "P01", "עגבניות": "P01", "מלפפון": "P03", "מלפפונים": "P03", "גזר": "P16", "בננה": "P28", "בננות": "P28",
+               "ביצים": "E01", "ביצים L": "E01", "ביצים לארג'": "E01", "ביצים M": "E02", "ביצים מדיום": "E02", "לימון": "P39",
+               "לימונים": "P39", "פלפל אדום": "P04", "תפוז": "P37", "תפוזים": "P37", "אבוקדו": "P29", "בטטה": "P15", "קישוא": "P18",
+               "קישואים": "P18", "חציל": "P17", "חצילים": "P17", "כרובית": "P21", "תפוח עץ": "P30", "תפוחים": "P30", "תפוחי עץ": "P30"}
+
+def basic_alias(name):
+    n = re.sub(r'(\d+(\.\d+)?|ק"ג|קג|קילו|גרם|יחידות|יח\'?|תבנית|ארוז(ה|ים)?|טרי(ים|יה|ה)?|רגיל(ה|ים)?|[–\-:,()])', " ", name)
+    return BASIC_ALIAS.get(" ".join(n.split()))
+
 def match_items(items):
     d = kdata.D
     cand = [d.search(it["name"]) for it in items]
+    for k, it in enumerate(items):
+        a = d.code2i.get(basic_alias(it["name"]) or "")
+        if a is not None: cand[k] = [a]                 # אין מה לבחור – זה הפריט הרגיל
     picks = [c[0] if c else None for c in cand]
     if CLAUDE_KEY and any(len(c) > 1 for c in cand):
         res = claude_json("Match each Israeli supermarket item to the option that is the SAME product (type, brand if given, similar size). "
@@ -432,20 +446,24 @@ def gp(P, it):
 def money(x): return f"{x:.2f}".rstrip("0").rstrip(".") if abs(x - round(x)) > 0.004 else f"{round(x)}"
 
 def lc(P, it):
-    """עלות השורה בסל בסניף (כמות × מחיר), כולל מבצעי כמות כשהכמות מספיקה. מחזיר (עלות, תיאור מבצע) או None"""
-    best = None; deals = getattr(P, "deals", {})
-    for g in it["g"]:
-        if g not in P: continue
-        reg = P[g]; q = it["qty"]; c = reg * q; txt = None
-        if g in deals:
-            u, k = deals[g]
-            bundle = u * k
-            if abs(bundle - round(bundle, 1)) < 0.025: bundle = round(bundle, 1)   # 3.33×3 → ₪10 (עיגול אגורות)
-            if q >= k:
-                n = int(q // k); c2 = n * bundle + (q - n * k) * reg
-                if c2 < c - 0.009: c, txt = c2, f"{k} ב־₪{money(bundle)}"
-        if best is None or c < best[0]: best = (c, txt)
-    return best
+    """עלות השורה בסל בסניף (כמות × מחיר), כולל מבצעי כמות כשהכמות מספיקה.
+    מחזיר (עלות, תיאור מבצע, שם החלופה או None) או None. אם אין בסניף את המוצר – מחפש חלופה שקולה (it["fb"])."""
+    deals = getattr(P, "deals", {})
+    for lst, sub in ((it["g"], False), (it.get("fb") or [], True)):
+        best = None
+        for g in lst:
+            if g not in P: continue
+            reg = P[g]; q = it["qty"]; c = reg * q; txt = None
+            if g in deals:
+                u, k = deals[g]
+                bundle = u * k
+                if abs(bundle - round(bundle, 1)) < 0.025: bundle = round(bundle, 1)   # 3.33×3 → ₪10 (עיגול אגורות)
+                if q >= k:
+                    n = int(q // k); c2 = n * bundle + (q - n * k) * reg
+                    if c2 < c - 0.009: c, txt = c2, f"{k} ב־₪{money(bundle)}"
+            if best is None or c < best[0]: best = (c, txt, kdata.D.items[g][1] if sub else None)
+        if best: return best
+    return None
 
 def compute(u):
     D = kdata.D
@@ -460,8 +478,9 @@ def compute(u):
         i = resolve(D, it)
         if i is None: gone.append(it["name"])
         else:
-            g = [i] if pr.get("brand") == "mine" else D.group(i, it.get("src") or it["name"])
-            items.append(dict(it, i=i, g=g))
+            mine = pr.get("brand") == "mine"
+            g = [i] if mine else D.group(i, it.get("src") or it["name"])
+            items.append(dict(it, i=i, g=g, fb=[] if mine else D.fallback(i, it.get("src") or it["name"])))
     if not items:
         return ["לא מצאתי אף אחד מהמוצרים במאגר המחירים העדכני 🙁 נסה לכתוב אותם שוב."]
     near = sorted(((km(home, s["p"]), s) for s in D.stores), key=lambda x: x[0])
@@ -557,7 +576,8 @@ def compute(u):
     for it in sorted(items, key=lambda it: -((lc(best["P"], it) or (med[it["i"]] * it["qty"],))[0])):
         c = lc(best["P"], it)
         q = f" ×{it['qty']:g}" if it["qty"] != 1 else ""
-        det.append(f"• {it['name']}{q} – " + (f"₪{c[0]:.2f}" + (f" 🔥 _מבצע {c[1]}_" if c[1] else "") if c is not None
+        det.append(f"• {it['name']}{q} – " + (f"₪{c[0]:.2f}" + (f" 🔥 _מבצע {c[1]}_" if c[1] else "")
+                                               + (f" _(אין בסניף – במקום: {c[2]})_" if c[2] else "") if c is not None
                                                else f"~₪{med[it['i']] * it['qty']:.2f} _(חסר בסניף)_"))
     if gone: det.append("\n_לא נמצאו במאגר: " + ", ".join(gone) + "_")
     fresh = f"\n\n_מחירים ומבצעים מעודכנים ל-{D.built[8:10]}/{D.built[5:7]} {D.built[11:16]}_" if len(D.built) >= 16 else ""
