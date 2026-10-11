@@ -16,6 +16,7 @@ UA = {"User-Agent": "koneh-ishi-price-bot/1.0 (+https://github.com/orizvi15-sys/
 MAX_ITEMS = 65000
 # מיקומים שאומתו ידנית
 OVERRIDES = {
+    "7290058140886-64": [32.5072, 34.9186],    # רמי לוי אור עקיבא – בקובץ רשום "חיפה"
     "7290027600007-106": [31.921009, 34.7933387], "7290055700007-422": [31.9220671, 34.8099931],
     "7290803800003-25": [31.930427, 34.7973195], "7290696200003-82": [31.914131, 34.7889942],
     "7290027600007-276": [31.891911, 34.789574], "7290058140886-41": [31.8933542, 34.7865316],
@@ -95,6 +96,7 @@ ABBR = {'ת"א': "תל אביב - יפו", "תא": "תל אביב - יפו", 'ב
         'ר"ג': "רמת גן", 'ק"ש': "קריית שמונה", 'ק. גת': "קריית גת", "ירושלים": "ירושלים",
         "מודיעין": "מודיעין-מכבים-רעות", "קדימה": "קדימה-צורן", "פרדס חנה": "פרדס חנה-כרכור", "דלית אל כרמל": "דאלית אל-כרמל",
         "חצור הגלילית": "חצור הגלילית", "מודיעין עלית": "מודיעין עילית", "עקרון": "קרית עקרון", "קרית עקרון": "קרית עקרון", "מודיעין עילית": "מודיעין עילית"}
+CITY_FIX = {"אריאל": [32.1043, 35.1745], "מודיעין עילית": [31.9318, 35.0431]}   # מרכזי ערים שחיפוש השם מחזיר לא נכון
 AMBIG = {"כרמל", "אזור", "רמות", "מגדל", "עין", "שורש", "לכיש", "גבעת", "נווה", "כפר", "מרכז", "צומת", "בית", "חצור", "רמת", "עזר", "שמיר", "ספיר", "סגולה"}   # מילים שהן גם שם יישוב קטן
 
 
@@ -109,7 +111,7 @@ def make_city_finder(cities):
     def find1(t, street):
         t = f" {t} "; hits = []               # כל ההתאמות – בוחרים את זו שמופיעה ראשונה (ואם שוויון – הארוכה)
         for a, full in list(ABBR.items()) + list(names.items()):
-            if street and a in STREET_WORDS: continue
+            if a not in t or (street and a in STREET_WORDS): continue        # בדיקה מהירה לפני regex
             for m in re.finditer(rf"(?<![א-ת]){re.escape(a)}(?![א-ת])", t):
                 if street and re.search(r"(שדרות|שד'|רחוב|רח'|דרך|כביש|צומת|מחלף|כיכר)\s*$", t[:m.start()]): continue
                 hits.append((m.start(), -len(a), full)); break
@@ -224,16 +226,24 @@ def main():
     for s in stores.values():
         if s.get("city") and s.get("p") and s.get("prec") in ("address", "google", "manual"): pts.setdefault(s["city"], []).append(s["p"])
     def center(c):
+        if c in CITY_FIX: return CITY_FIX[c]
         L = pts.get(c, [])
         if len(L) >= 3: return [statistics.median(x[0] for x in L), statistics.median(x[1] for x in L)]
         if c not in city_geo and q_left > 0: city_geo[c] = geocode(c)
         return city_geo.get(c)
+    def radius(c):                       # כמה רחוק מהמרכז סביר לסניף באותה עיר (לפי פיזור הסניפים בה)
+        L = pts.get(c, []); cc = center(c)
+        if len(L) < 3 or not cc: return 15
+        return max(8, 2.5 * statistics.median(dist_km(x, cc) for x in L))
     bad = 0
     for k, s in stores.items():
         c = s.get("city"); p = s.get("p")
-        if not c or not p or s.get("prec") in ("manual", "city", "google"): continue
+        if not c or not p or s.get("prec") in ("manual", "google"): continue
         cc = center(c)
-        if cc and dist_km(p, cc) > 20:
+        if not cc: continue
+        if s.get("prec") == "city":      # מיקום לפי עיר – משתמשים במרכז העיר האמין (חיפוש שם עיר לפעמים מחזיר מקום אחר)
+            s["p"] = cc; continue
+        if dist_km(p, cc) > radius(c):
             bad += 1; print("far from its city:", s["chain"], s["name"], s["addr"], c, round(dist_km(p, cc)), "km")
             s["p"], s["prec"] = cc, "city"
     print("stores moved to their city center:", bad)
