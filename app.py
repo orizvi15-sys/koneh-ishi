@@ -33,6 +33,8 @@ DRY_RUN = os.environ.get("DRY_RUN") == "1"  # לבדיקות: מדפיס במק�
 import kdata  # הנתונים הארציים – kdata.D הוא תמיד הגרסה העדכנית
 FUEL, KM_PER_L, ROAD, CAR_KMH, WALK_KMH, PARK_MIN = 7.77, 13, 1.3, 28, 4.5, 3
 
+CAR_MAX_MIN = 35   # ברכב: סניפים עד ~35 דקות נסיעה (תמיד כולל הקרוב ביותר)
+
 def car_min(d):
     """זמן נסיעה משוער ברכב: 5 הק"מ הראשונים בעיר (28 קמ"ש), עד 15 ק"מ כביש בינעירוני (55), מעבר לזה כביש מהיר (75)"""
     t = min(d, 5) / CAR_KMH + max(0, min(d, 15) - 5) / 55 + max(0, d - 15) / 75
@@ -418,10 +420,11 @@ def gp(P, it):
 
 def compute(u):
     D = kdata.D
-    pr = u["prefs"]; home = pr["home"]; car = pr["mode"] == "car"; bus = pr["mode"] == "bus"
+    pr = dict(u["prefs"]); home = pr["home"]; car = pr["mode"] == "car"; bus = pr["mode"] == "bus"
+    if car and pr.get("maxMin", 999) > CAR_MAX_MIN: pr["maxMin"] = CAR_MAX_MIN   # בלי עלות דלק – לא שולחים רחוק מדי
     split_min = -1 if pr.get("splitMin", SPLIT_MIN) < 0 else SPLIT_MIN
     clubs = set(pr.get("clubs") or [])
-    cost = lambda d: d * FUEL / KM_PER_L if car else 0
+    cost = lambda d: 0          # המחיר המוצג = מוצרים בלבד (בלי דלק)
     mins = lambda d: car_min(d) if car else (d / BUS_KMH * 60 + BUS_WAIT if bus else d / WALK_KMH * 60)
     items, gone = [], []
     for it in u["items"]:
@@ -495,10 +498,10 @@ def compute(u):
     others = [r for r in ranked if r["s"]["key"] != s["key"]]
     avg = sum(r["tot"] for r in others) / len(others) if others else None
     L = []
-    far_km = km(home, nearest["s"]["p"])
-    if far_km > 25:
-        L.append(f"⚠️ _עדיין אין לי סניפים באזור שלך (הקרוב ביותר: {far_km:.0f} ק\"מ)._\n")
-    inc = " (כולל עלות הנסיעה)" if car else ""
+    if nearest["min"] > 45:
+        L.append(f"⚠️ _עדיין אין לי סניפים באזור שלך (הקרוב ביותר: {round(nearest['min'])} דק' נסיעה)._\n")
+    inc = ""
+    ride = "🚗" if car else ("🚌" if bus else "🚶")
     if stay:
         L.append(f"👍 הסופר הקבוע שלך משתלם: *{s['n']}*" + kosher_tag(s))
         L.append(f"💰 מחיר הסל: *₪{best['tot']:.0f}*" + (" (במחירי מועדון)" if best.get("club") else ""))
@@ -510,7 +513,7 @@ def compute(u):
             L.append(f"✅ חוסך *₪{gap:.0f}* לעומת {reg['s']['n']}{inc}")
         elif avg and avg - best["tot"] >= 1:
             L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}*{inc}")
-    L.append(f"📍 {best['d'] / 2:.1f} ק\"מ ממך · {round(best['min'])} דק' {how}")
+    L.append(f"{ride} {round(best['min'])} דק' {how} ממך")
     split_txt = None
     if split and best["tot"] - split["tot"] > split_min:
         A, B = split["A"]["s"], split["B"]["s"]
@@ -523,7 +526,6 @@ def compute(u):
         q = f" ×{it['qty']:g}" if it["qty"] != 1 else ""
         det.append(f"• {it['name']}{q} – " + (f"₪{p * it['qty']:.2f}" if p is not None else f"~₪{med[it['i']] * it['qty']:.2f} _(חסר בסניף)_"))
     if gone: det.append("\n_לא נמצאו במאגר: " + ", ".join(gone) + "_")
-    if car and best["fuel"] >= 1: det.append(f"\n⛽ דלק הלוך-חזור: ₪{best['fuel']:.0f}")
     fresh = f"\n\n_מחירים ומבצעים מעודכנים ל-{D.built[8:10]}/{D.built[5:7]} {D.built[11:16]}_" if len(D.built) >= 16 else ""
     saved = 0 if stay else (gap if reg else (avg - best["tot"] if avg else 0))
     ip = {}
@@ -537,7 +539,7 @@ def compute(u):
                       + "🏪 *כל הסופרים בטווח:*\n\n" + "\n\n".join(
                 f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} *{full_name(r['s'])}*" + (" ⭐ _הקבוע שלך_" if r is reg else "") + "\n"
                 + ("      ✡️ סניף כשר\n" if is_kosher(r["s"]) else "") +
-                f"      📍 {r['s']['a']}\n      💰 ₪{r['tot']:.0f} · {round(r['min'])} דק'" + (f" _· חסרים {r['miss']}_" if r["miss"] else "")
+                f"      📍 {r['s']['a']}\n      💰 ₪{r['tot']:.0f} · {ride} {round(r['min'])} דק'" + (f" _· חסרים {r['miss']}_" if r["miss"] else "")
                 for r in (inrange[:10] + ([reg] if reg and reg not in inrange[:10] else []))) + fresh,
             "split": split_txt}
 
@@ -921,17 +923,18 @@ def price_answer(to, u, item):
         g = D.group(i, x.get("src") or x["name"]); rows = []
         for s in near:
             d1 = km(home, s["p"]); mn = car_min(d1) if pr["mode"] == "car" else (d1 / BUS_KMH * 60 + BUS_WAIT if pr["mode"] == "bus" else d1 / WALK_KMH * 60)
-            if rows and mn > pr["maxMin"]: break
+            if rows and mn > (min(pr["maxMin"], CAR_MAX_MIN) if pr["mode"] == "car" else pr["maxMin"]): break
             p = gp(D.store_prices(s, clubs), dict(x, i=i, g=g))
-            if p is not None: rows.append((p, d1, s))
+            if p is not None: rows.append((p, mn, s))
             if len(rows) >= MAX_POOL: break
         if len(rows) >= 2: break
     if not rows: return send_text(to, f"לא מצאתי את *{D.items[i][1]}* בסופרים באזור שלך 🙁")
     rows.sort(key=lambda r: r[0]); kg = 'לק"ג' in D.items[i][1]
     unit = " לק\"ג" if kg else ""
     L = [f"💰 *{D.items[i][1]}* – באזור שלך:", ""]
-    for k, (p, d1, s) in enumerate(rows[:5]):
-        L.append(f"{'🏆' if k == 0 else '▫️'} {s['n']} – *₪{p:.2f}*{unit} · {d1:.1f} ק\"מ")
+    ride = "🚗" if pr["mode"] == "car" else ("🚌" if pr["mode"] == "bus" else "🚶")
+    for k, (p, mn, s) in enumerate(rows[:5]):
+        L.append(f"{'🏆' if k == 0 else '▫️'} {s['n']} – *₪{p:.2f}*{unit} · {ride} {round(mn)} דק'")
     if len(rows) > 1 and rows[-1][0] - rows[0][0] >= 0.5:
         L.append(f"\n✅ הפרש של עד ₪{rows[-1][0] - rows[0][0]:.2f} בין הסופרים באזור")
     return send_text(to, "\n".join(L))
