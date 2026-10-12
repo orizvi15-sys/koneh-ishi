@@ -367,8 +367,41 @@ D = None
 _last_try = 0
 
 
-def _download():
-    tmp = CACHE_FILE + ".part"
+GATE = {}            # עדכון נתונים שנחסם: {"reason", "version", "t"} – הבוט ממשיך עם הנתונים הקודמים
+GATE_ACCEPT = set()  # גרסאות שהמנהל אישר ידנית ("אשר נתונים")
+
+def data_gate(old, new):
+    """שומר סף: עדכון שנראה פגום לא נכנס לבוט. מחזיר סיבה, או None אם תקין."""
+    if old is None or old.source != "remote" or new.version in GATE_ACCEPT: return None
+    if len(new.stores) < 0.85 * len(old.stores): return f"מספר הסניפים ירד מ-{len(old.stores)} ל-{len(new.stores)}"
+    if len(new.items) < 0.8 * len(old.items): return f"מספר המוצרים ירד מ-{len(old.items):,} ל-{len(new.items):,}"
+    oc, nc = {}, {}
+    for st in old.stores: oc[st["chain"]] = oc.get(st["chain"], 0) + 1
+    for st in new.stores: nc[st["chain"]] = nc.get(st["chain"], 0) + 1
+    for ch, n in oc.items():
+        if n >= 15 and nc.get(ch, 0) < 0.6 * n: return f"{ch}: ירדה מ-{n} ל-{nc.get(ch, 0)} סניפים"
+    # מחירים: אותם מוצרים נפוצים באותם סניפים – אם הרבה קפצו פתאום, כנראה קובץ פגום
+    try:
+        common = [it[0] for it in sorted(old.items, key=lambda x: -x[2])[:200]]
+        okey = {st["key"]: st for st in old.stores}; ratios = []
+        for st in new.stores[::max(1, len(new.stores) // 60)]:
+            so = okey.get(st["key"])
+            if not so: continue
+            po, pn = old.store_prices(so, set()), new.store_prices(st, set())
+            for c in common:
+                io, inn = old.code2i.get(c), new.code2i.get(c)
+                if io in po and inn in pn and po[io] > 0: ratios.append(pn[inn] / po[io])
+        if len(ratios) > 300:
+            ratios.sort(); jumped = sum(1 for r in ratios if r > 1.5 or r < 0.67) / len(ratios)
+            if jumped > 0.15: return f"{jumped:.0%} מהמחירים הנפוצים קפצו פי 1.5 ומעלה בבת אחת"
+    except Exception as ex:
+        print("gate price check error", ex, flush=True)
+    return None
+
+
+def _download(dest=None):
+    dest = dest or CACHE_FILE
+    tmp = dest + ".part"
     req = urllib.request.Request(DATA_URL, headers={"User-Agent": "koneh-ishi-bot"})
     with urllib.request.urlopen(req, timeout=120) as r, open(tmp, "wb") as f:
         while True:
@@ -377,7 +410,7 @@ def _download():
             f.write(b)
     with open(tmp, "rb") as f:
         if f.read(4) != b"KISH": raise ValueError("downloaded file is not a data file")
-    os.replace(tmp, CACHE_FILE)
+    os.replace(tmp, dest)
 
 
 def load(force_download=True):
@@ -386,11 +419,19 @@ def load(force_download=True):
     _last_try = time.time()
     if force_download and DATA_URL:
         try:
-            t0 = time.time(); _download()
-            if D is not None and D.source == "remote" and _peek_version(CACHE_FILE) == D.version:
+            t0 = time.time(); NEW = CACHE_FILE + ".new"; _download(NEW)
+            if D is not None and D.source == "remote" and _peek_version(NEW) == D.version:
                 return D                                   # אותה גרסה – לא בונים מחדש (חוסך זיכרון ו-CPU)
-            nd = _from_bin(CACHE_FILE)
+            if GATE and _peek_version(NEW) == GATE.get("version"):
+                return D                                   # אותו עדכון שכבר נחסם – לא בודקים שוב
+            nd = _from_bin(NEW)
             if D is None or nd.version != D.version:
+                why = data_gate(D, nd)
+                if why:
+                    GATE.clear(); GATE.update(reason=why, version=nd.version, t=time.time())
+                    print("🛑 עדכון נתונים נחסם:", why, flush=True); return D
+                GATE.clear()
+                os.replace(NEW, CACHE_FILE)
                 threading.Thread(target=nd.warm, daemon=True).start()
                 D = nd; print(f"נתונים: {len(D.stores)} סניפים, {len(D.items)} מוצרים, גרסה {D.version} ({time.time() - t0:.1f}s)", flush=True)
             return D

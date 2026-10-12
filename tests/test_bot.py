@@ -330,6 +330,44 @@ def _():
             assert not any("משהו השתבש" in o.get("text", "") for o in OUT), ("כפתור", b[:30], st["step"])
     OUT.clear()
 
+@test("שומר סף לנתונים: עדכון עם חצי מהסניפים / מחירים שקפצו – נחסם; עדכון רגיל – עובר")
+def _():
+    import copy
+    D = kdata.D
+    assert kdata.data_gate(D, D) is None
+    half = copy.copy(D); half.version = "test-half"; half.stores = D.stores[: len(D.stores) // 2]
+    assert kdata.data_gate(D, half), "חצי סניפים לא נחסם"
+    jump = copy.copy(D); jump.version = "test-jump"
+    orig_sp = D.store_prices
+    def inflated(store, clubs=()):
+        P = orig_sp(store, clubs); Q = type(P)({k: v * 2 for k, v in P.items()})
+        Q.deals = getattr(P, "deals", {}); return Q
+    jump.store_prices = inflated
+    assert "קפצו" in (kdata.data_gate(D, jump) or ""), kdata.data_gate(D, jump)
+    kdata.GATE.update(reason="בדיקה", version="test-half", t=0); _ld = kdata.load
+    try:
+        assert any("נחסם" in x for x in app.watchdog_issues())
+        setup_user(ADMIN); kdata.load = lambda *a, **k: kdata.D
+        send(ADMIN, "אשר נתונים"); assert "אישרתי" in last(), last()
+        assert "test-half" in kdata.GATE_ACCEPT and not kdata.GATE
+    finally:
+        kdata.GATE.clear(); kdata.GATE_ACCEPT.discard("test-half"); kdata.load = _ld
+
+@test("דיוק מול קבלות: מחיר בקבלה נבדק מול המחיר שלנו באותו סניף ונכנס לדוח השבועי")
+def _():
+    D = kdata.D; s0 = next(s for s in D.stores if s["n"] == "רמי לוי אופקים"); P = D.store_prices(s0, set())
+    found, _m = app.match_items([{"name": "במבה", "qty": 1}, {"name": "קוטג' 5%", "qty": 1}])
+    i1, i2 = D.code2i[found[0]["code"]], D.code2i[found[1]["code"]]
+    assert i1 in P and i2 in P
+    rows = [{"name": "במבה", "qty": 1, "price": P[i1]}, {"name": "קוטג' 5%", "qty": 1, "price": P[i2] + 5}]
+    app.USERS.setdefault("_meta", {}).pop("wk", None)
+    app.receipt_check(s0["key"], rows, found)
+    acc = app.wk()["acc"]["רמי לוי"]
+    assert acc == [2, 1], acc
+    assert app.wk()["acc_bad"][0][1].startswith(found[1]["name"][:10])
+    assert "דיוק מול קבלות" in app.weekly_report()
+    app.USERS["_meta"].pop("wk", None)
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

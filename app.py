@@ -252,6 +252,8 @@ RECEIPT_PROMPT = ('Extract the purchased products from this Israeli supermarket 
                   'A size or count INSIDE one package is part of the name, NOT qty: "נייר טואלט – 12 גלילים" = {"name":"נייר טואלט 12 גלילים","qty":1}, '
                   '"ביצים – 12 יחידות" = {"name":"ביצים 12 יחידות","qty":1}, "מים מינרליים – שישייה" = qty 1, "קמח – 1 ק\"ג" = {"name":"קמח 1 ק\"ג","qty":1}. '
                   'Be consistent: the same input must always give the same output. '
+                  'For a receipt also add "price" = the total paid for that line in shekels (after per-line discount if printed on the line), '
+                  'or null if not readable / a shopping list. '
                   'Photos are often blurry, dark, crooked or crumpled: extract every product line you can read with reasonable confidence, '
                   'skip lines you cannot read, never invent products. Also add "quality": "ok" (everything readable), "partial" (some lines '
                   'unreadable or the receipt is cut off) or "bad" (almost nothing readable), and "issue": one of "dark", "blurry", "cut", '
@@ -271,7 +273,12 @@ def extract_items(image=None, mime="image/jpeg", text=None, with_store=False):
         if not isinstance(x, dict) or not str(x.get("name", "")).strip(): continue
         try: q = float(x.get("qty") or 1)
         except Exception: q = 1
-        out.append({"name": str(x["name"]).strip(), "qty": q if 0 < q < 100 else 1})
+        row = {"name": str(x["name"]).strip(), "qty": q if 0 < q < 100 else 1}
+        try:
+            pr = float(x.get("price")) if x.get("price") not in (None, "") else None
+            if pr and 0 < pr < 2000: row["price"] = pr
+        except Exception: pass
+        out.append(row)
     return (out, store, meta) if with_store else out
 
 
@@ -724,6 +731,9 @@ def stats_text():
          f"⏰ תזכורות פעילות: {sum(1 for u in us.values() if u.get('remind_at') and not u.get('prefs', {}).get('remind_off'))}"]
     if clubs: L.append("💳 מועדונים: " + ", ".join(f"{c} {n}" for c, n in sorted(clubs.items(), key=lambda x: -x[1])))
     iss = watchdog_issues()
+    g = kdata.GATE
+    if g: out.append(f"🛑 עדכון נתונים חדש נחסם: {g['reason']}.\nהבוט ממשיך עם הנתונים הקודמים והתקינים. "
+                     "אם השינוי אמיתי (למשל רשת באמת סגרה סניפים) – כתבו לבוט: *אשר נתונים*")
     qa = getattr(D, "qa", {}) or {}
     L += ["", "🛡️ " + ("הכל תקין" if not iss else f"{len(iss)} התראות:")] + iss
     if qa.get("removed") is not None: L.append(f"🧪 בדיקת מחירים: הוסרו {qa['removed']:,} מחירים חשודים בעדכון האחרון")
@@ -807,6 +817,9 @@ def watchdog_issues():
         n = info.get("stores", 0)
         if seen.get(ch) and n < 0.75 * seen[ch]: out.append(f"⚠️ {he} ירדה מ-{seen[ch]} ל-{n} סניפים")
         elif n: seen[ch] = max(n, int(seen.get(ch, 0) * 0.9))
+    g = kdata.GATE
+    if g: out.append(f"🛑 עדכון נתונים חדש נחסם: {g['reason']}.\nהבוט ממשיך עם הנתונים הקודמים והתקינים. "
+                     "אם השינוי אמיתי (למשל רשת באמת סגרה סניפים) – כתבו לבוט: *אשר נתונים*")
     qa = getattr(D, "qa", {}) or {}
     for ch, n in (qa.get("by_chain") or {}).items():     # בדיקת תקינות: הרבה מחירים חשודים ברשת אחת = כנראה קובץ פגום
         if n >= 1500: out.append(f"⚠️ {ch}: {n:,} מחירים חשודים הוסרו בעדכון האחרון (כנראה קובץ פגום אצל הרשת)")
@@ -1025,6 +1038,13 @@ def weekly_report():
     L += ["", "👥 *שימוש השבוע*", f"🛒 קניות שנבדקו: {w.get('baskets', 0)} · 🧾 קבלות: {nb}"
           + (f" (חלקיות: {w.get('r_partial', 0)}, לא נקראו: {w.get('r_bad', 0)})" if nb else ""),
           f"🚨 תקלות: {w.get('errors', 0)}"]
+    acc = w.get("acc") or {}
+    if acc:
+        tot = sum(v[0] for v in acc.values()); good = sum(v[1] for v in acc.values())
+        L += ["", f"🧾 *דיוק מול קבלות אמיתיות*: {good}/{tot} מחירים תואמים ({good / max(tot, 1):.0%})"]
+        L += [f"• {c}: {v[1]}/{v[0]}" for c, v in sorted(acc.items(), key=lambda x: -x[1][0])[:6]]
+        for b in (w.get("acc_bad") or [])[:6]:
+            L.append(f"   ⚠️ {b[0]} – {b[1]}: בקבלה ₪{b[2]} · אצלנו ₪{b[3]}")
     top = lambda d, k=8: sorted(d.items(), key=lambda x: -x[1])[:k]
     if w.get("notfound"):
         L += ["", "🔎 *מוצרים שהבוט לא מצא* (כדאי ללמד אותו):"] + [f"• {n} ×{c}" for n, c in top(w["notfound"])]
@@ -1304,8 +1324,32 @@ def got_receipt(to, u, img, mime):
     if sk: st = u.setdefault("stores", {}); st[sk] = st.get(sk, 0) + 1
     if meta.get("quality") == "partial":
         u["note"] = "⚠️ חלק מהקבלה לא היה ברור – אפשר לשלוח עכשיו צילום של החלק החסר ואחבר אותו, או לכתוב מה חסר ✍️"
-    return got_items(to, u, items)
+    res = got_items(to, u, items)
+    try: receipt_check(sk, items, u.get("items") or [])
+    except Exception as ex: print("receipt check error", ex, flush=True)
+    return res
 
+
+def receipt_check(store_key, rows, found):
+    """בדיקת דיוק מהשטח: המחיר בקבלה מול המחיר שלנו לאותו מוצר באותו סניף (נצבר לדוח השבועי)"""
+    D = kdata.D
+    st = next((x for x in D.stores if x["key"] == store_key), None) if store_key else None
+    if not st: return
+    P = D.store_prices(st, set()); paid = {r["name"]: r for r in rows if r.get("price")}
+    w = wk(); acc = w.setdefault("acc", {}); bad = w.setdefault("acc_bad", [])
+    ch = acc.setdefault(st["chain"], [0, 0])               # [נבדקו, תואמים]
+    deals = getattr(P, "deals", {})
+    for f in found:
+        r = paid.get(f.get("src"))
+        i = D.code2i.get(f.get("code", ""))
+        if not r or i is None or i not in P: continue
+        ours = lc(P, {"g": [i], "qty": r["qty"]})
+        if not ours: continue
+        ours = ours[0]; ok = abs(ours - r["price"]) <= max(0.5, 0.03 * r["price"])
+        if not ok and i in deals and abs(P[i] * r["qty"] - r["price"]) <= max(0.5, 0.03 * r["price"]): ok = True   # מבצע כמות שלא הופעל בקופה
+        ch[0] += 1; ch[1] += ok
+        if not ok and len(bad) < 60:
+            bad.append([st["n"], f["name"][:40], round(r["price"], 2), round(ours, 2)])
 
 def got_items(to, u, items):
     found, missed = match_items(items)
@@ -1484,6 +1528,12 @@ def handle(msg):
             send_text(to, "רשמתי אותך כמנהל הבוט 🔐 רק אתה תוכל לראות את הנתונים.")
         if to not in adm: return send_text(to, "לא הבנתי 🙂")
         return send_text(to, stats_text())
+    if text in ("אשר נתונים", "/acceptdata") and to in admins():
+        g = dict(kdata.GATE)
+        if not g: return send_text(to, "אין כרגע עדכון נתונים חסום 👍")
+        kdata.GATE_ACCEPT.add(g["version"]); kdata.GATE.clear()
+        threading.Thread(target=kdata.load, daemon=True).start()
+        return send_text(to, f"✅ אישרתי את העדכון ({g['reason']}). טוען אותו עכשיו – כדקה.")
     if text in ("/report", "דוח שבועי", "דוח") and to in admins():
         track_stores(); return send_text(to, weekly_report())
     if text in ("/selftest", "בדיקה עצמית") and to in admins():
