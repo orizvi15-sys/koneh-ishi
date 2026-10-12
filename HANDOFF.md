@@ -11,11 +11,11 @@
 | חלק | איפה | הערות |
 |---|---|---|
 | הבוט | Render (`app.py`, `kdata.py`) | נטען מחדש כל חצי שעה מ-`koneh-data.bin` |
-| זיכרון משתמשים | repo פרטי `orizvi15-sys/koneh-ishi-bot` (`users.json`) | |
+| זיכרון משתמשים | repo פרטי `orizvi15-sys/koneh-ishi-bot` (`users.json`) | מיזוג לפי `_t` לכל משתמש, כל 15 שנ' ולפני כל שמירה (שרת ישן+חדש בזמן עדכון) |
 | איסוף מחירים (22 רשתות) | GitHub Actions `daily-data` כל שעה | הורדה מלאה כל 4 שעות, בשאר השעות רק שינויים |
 | 5 רשתות חסומות מחו"ל | שרת GCP `koneh-il` (me-west1-a, משתמש tkevb24) | ויקטורי, חצי חינם, מחסני השוק, נתיב החסד, ח. כהן. `~/koneh/run.sh` מ-cron כל שעה, מעלה ל-release |
 | מיקומים | Google Geocoding (סוד `GOOGLE_MAPS_KEY`) + OpenStreetMap שבועי (`osm.yml`) | Google Places כבוי בכוונה (בלי חיובים) |
-| בדיקות | `tests/test_bot.py` (32 בדיקות) + workflow `tests` | רץ על כל שינוי בקוד |
+| בדיקות | `tests/test_bot.py` (34 בדיקות) + workflow `tests` | רץ על כל שינוי בקוד |
 
 ## בדיקות והתראות אוטומטיות (מגיעות לאורי בטלגרם)
 - **שומר לילה:** רשת לא מתעדכנת, ירידה בסניפים, מחירים חשודים, עדכון נתונים שנחסם.

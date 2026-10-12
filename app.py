@@ -90,19 +90,63 @@ def load_users():
     try: return json.load(open(USERS_PATH, encoding="utf-8"))
     except Exception: return {}
 
+# ---- סנכרון בין שרתים ----
+# בכל עדכון קוד Render מעלה שרת חדש בזמן שהישן עוד רץ. השרת החדש טוען את הזיכרון מ-GitHub –
+# ובלי סנכרון הוא עובד עם גרסה ישנה (מיקום קודם, קניות שכבר נמחקו באיפוס) ודורס את מה שהישן שמר.
+# הפתרון: לכל משתמש חותמת זמן "_t" של השינוי האחרון. לפני כל שמירה, וגם כל 15 שניות, ממזגים עם GitHub –
+# לכל משתמש נשארת הגרסה החדשה יותר. משתמש שנמחק ("מחק אותי") נרשם ב-_meta.deleted כדי שלא יחזור.
+SYNC_SEC = 15
+
+def touch(to):
+    """מסמן שהמשתמש השתנה עכשיו (הגרסה הזו מנצחת במיזוג)"""
+    u = USERS.get(to)
+    if isinstance(u, dict): u["_t"] = time.time()
+
+def forget_user(to):
+    USERS.pop(to, None)
+    USERS.setdefault("_meta", {}).setdefault("deleted", {})[to] = time.time()
+
+def merge_users(remote):
+    """ממזג את הזיכרון מ-GitHub לזיכרון המקומי: לכל משתמש – הגרסה עם "_t" החדש יותר. מחזיר כמה משתמשים עודכנו מבחוץ"""
+    if not isinstance(remote, dict): return 0
+    n = 0
+    with _lock:
+        meta = USERS.setdefault("_meta", {}); rmeta = remote.get("_meta") or {}
+        dele = meta.setdefault("deleted", {})
+        for k, t in (rmeta.get("deleted") or {}).items(): dele[k] = max(t, dele.get(k, 0))
+        for k, v in rmeta.items():
+            if k != "deleted" and k not in meta: meta[k] = v
+        for k, rv in remote.items():
+            if k.startswith("_") or not isinstance(rv, dict): continue
+            rt = rv.get("_t", 0); lv = USERS.get(k)
+            if dele.get(k, -1) >= rt: continue                            # נמחק אחרי הגרסה הזו
+            if not isinstance(lv, dict): USERS[k] = rv; n += 1
+            elif rt > lv.get("_t", 0): lv.clear(); lv.update(rv); n += 1  # במקום – כדי שמי שמחזיק את האובייקט יראה את העדכון
+        for k in [k for k, v in USERS.items() if not k.startswith("_") and isinstance(v, dict) and dele.get(k, -1) >= v.get("_t", 0)]:
+            USERS.pop(k, None); n += 1
+    return n
+
+def pull_users():
+    if not _remote["ok"]: return 0
+    r = gh_users("GET"); _remote["sha"] = r["sha"]
+    n = merge_users(json.loads(base64.b64decode(r["content"]).decode("utf-8") or "{}"))
+    if n: print(f"סנכרון: {n} משתמשים עודכנו מהזיכרון ב-GitHub", flush=True)
+    return n
+
 def push_users():
     if not _remote["ok"]: return
-    with _lock: content = json.dumps(USERS, ensure_ascii=False, separators=(",", ":"))
-    body = {"message": "update users", "content": base64.b64encode(content.encode()).decode()}
     for attempt in range(3):
-        if _remote["sha"]: body["sha"] = _remote["sha"]
         try:
+            try: pull_users()                                   # קודם ממזגים – לא דורסים שינוי חדש יותר משרת אחר
+            except urllib.error.HTTPError as e:
+                if e.code != 404: raise
+                _remote["sha"] = None
+            with _lock: content = json.dumps(USERS, ensure_ascii=False, separators=(",", ":"))
+            body = {"message": "update users", "content": base64.b64encode(content.encode()).decode()}
+            if _remote["sha"]: body["sha"] = _remote["sha"]
             _remote["sha"] = gh_users("PUT", body)["content"]["sha"]; return
         except urllib.error.HTTPError as e:
-            if e.code in (409, 422):  # sha לא עדכני – מביאים את האחרון ומנסים שוב
-                try: _remote["sha"] = gh_users("GET")["sha"]
-                except Exception: pass
-            else:
+            if e.code not in (409, 422):  # 409/422 = sha לא עדכני – מנסים שוב (עם מיזוג)
                 print("שמירת זיכרון נכשלה:", e.code, e.read()[:200], flush=True); time.sleep(5)
         except Exception as e:
             print("שמירת זיכרון נכשלה:", e, flush=True); time.sleep(5)
@@ -110,7 +154,11 @@ def push_users():
 
 def _users_writer():
     while True:
-        _dirty.wait(); time.sleep(10); _dirty.clear(); push_users()
+        if _dirty.wait(SYNC_SEC):
+            time.sleep(3); _dirty.clear(); push_users()
+        else:
+            try: pull_users()                                   # קולטים שינויים משרת אחר (למשל הישן לפני שנכבה)
+            except Exception as e: print("סנכרון נכשל:", e, flush=True)
 
 USERS = load_users()
 threading.Thread(target=_users_writer, daemon=True).start()
@@ -611,7 +659,7 @@ def compute(u):
             L.append(f"✅ חוסך *₪{gap:.0f}* לעומת {ref['s']['n']}" + ("" if reg else " (הקרוב אליך)") + inc)
         elif avg and avg - best["tot"] >= 1:
             L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}*{inc}")
-    L.append(f"{ride} {round(best['min'])} דק' {how} ממך")
+    L.append(f"{ride} {round(best['min'])} דק' {how} ממך ({place_name(home)})")
     if rare: L.append("🔎 _לא נמצאו בסופרים באזור שלך: " + ", ".join(dict.fromkeys(rare)) + "_")
     split_txt = None
     if split and best["tot"] - split["tot"] > split_min:
@@ -1574,7 +1622,7 @@ def handle(msg):
     if re.fullmatch(r"(כמה חסכתי|חיסכון|סיכום|סיכום חיסכון|כמה חסכתי\?|/savings)", text):
         return send_text(to, savings_text(u) or "עוד לא בדקת קניות החודש 🙂 שלחו רשימה או קבלה ואתחיל לספור.")
     if text == "מחק אותי":
-        USERS.pop(to, None); save_users()
+        forget_user(to); save_users()
         return send_text(to, "מחקתי את כל המידע שלך 🗑️ כדי להתחיל מחדש כתבו היי.")
     if text == M_CAM:
         reply, text = "cam", ""
@@ -1860,7 +1908,8 @@ def safe_handle(m):
             typing(m["from"])
             if done.wait(4.0): return
     if is_tg(m["from"]): threading.Thread(target=keep_typing, daemon=True).start()
-    try: handle(m)
+    try:
+        handle(m); touch(m["from"]); save_users()
     except Exception as ex:
         import traceback; traceback.print_exc()
         try: send_text(m["from"], "אופס, משהו השתבש אצלי 🙈 נסה שוב בעוד רגע.")

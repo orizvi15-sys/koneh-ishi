@@ -428,6 +428,38 @@ def _():
         assert not u.get("hist") and "stores" not in u and "receipts" not in u, (how, u)
         assert app.usual_store(u) is None and app.learned(u) == []
 
+ASHKELON, PT = (31.6688, 34.5743), (32.0880, 34.8860)
+
+@test("איפוס → מיקום באשקלון → רשימה: סופר באשקלון, בלי 'בדרך כלל אתה קונה גם' – באג 12/10")
+def _():
+    to = "tg:3232"; setup_user(to, *PT)
+    u = app.USERS[to]; u["stores"] = {"7290873255550-87": 5}
+    u["hist"] = [{"d": 1, "saved": 0, "items": [{"code": "", "name": "פחם", "src": "פחם", "qty": 1}]}] * 3
+    send(to, "איפןס"); loc(to, *ASHKELON); press(to, "club:none"); OUT.clear()
+    send(to, "במבה, חלב, לחם")
+    T = texts()
+    assert not any("בדרך כלל" in t for t in T), T
+    main = next(t for t in T if "מחיר הסל" in t)
+    assert "אשקלון" in main and "פתח תקווה" not in main, main
+    m = re.search(r"(\d+) דק'", main); assert m and int(m.group(1)) <= 20, main
+    assert not app.USERS[to].get("stores") and len(app.USERS[to]["hist"]) == 1
+
+@test("שרת ישן בזמן עדכון: זיכרון ישן מ-GitHub לא מחזיר מיקום ישן / קניות שנמחקו – באג 12/10")
+def _():
+    import copy
+    to = "tg:3333"; setup_user(to, *PT)
+    app.USERS[to]["hist"] = [{"d": 1, "items": []}] * 3; app.touch(to)
+    old = copy.deepcopy({to: app.USERS[to]}); time.sleep(0.01)          # מה שהשרת הישן שמר
+    send(to, "איפוס"); loc(to, *ASHKELON)                                  # בשרת החדש
+    app.merge_users(old)
+    u = app.USERS[to]
+    assert app.km(u["prefs"]["home"], ASHKELON) < 1 and not u["hist"], u
+    newer = copy.deepcopy({to: u}); newer[to]["prefs"]["home"] = list(PT); time.sleep(0.01); newer[to]["_t"] = time.time(); time.sleep(0.01)
+    app.merge_users(newer); assert app.km(app.USERS[to]["prefs"]["home"], PT) < 1     # שינוי חדש יותר משרת אחר – נקלט
+    send(to, "מחק אותי"); assert to not in app.USERS
+    app.merge_users(newer); assert to not in app.USERS, "משתמש שנמחק חזר מהזיכרון הישן"
+    send(to, "היי"); assert to in app.USERS                                # אפשר להתחיל מחדש
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:
