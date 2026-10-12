@@ -491,6 +491,19 @@ def _():
     blk = next(b for b in r["others"].split("\n\n") if "בן צבי" in b)
     assert "בשר בקר טחון" not in blk, blk
 
+@test("מחיר הסל מציג גם הערכה לחסרים ('₪X + ~₪Y על N שחסרים') – בקשה 12/10")
+def _():
+    r = {"miss": 3, "sum": 1046.4, "have": 966.2}
+    assert app.miss_est(r) == " + ~₪80 על 3 שחסרים", app.miss_est(r)
+    assert app.miss_est({"miss": 1, "sum": 30, "have": 20}) == " + ~₪10 על מוצר אחד שחסר"
+    assert app.miss_est({"miss": 0, "sum": 5, "have": 5}) == ""
+    for lat, lng in ((31.8948, 34.8113), (32.0809, 34.7806)):
+        u = {"step": "done", "prefs": {"home": [lat, lng], "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "hist": [],
+             "items": [dict(x) for x in BBQ_ITEMS]}
+        r = app.compute(u)
+        for blk in [r["main"]] + r["others"].split("\n\n"):
+            if "חסר בסניף" in blk: assert "שחסר" in blk, blk[:300]
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

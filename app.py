@@ -585,6 +585,12 @@ def lc(P, it):
         if best: return best
     return None
 
+def miss_est(r):
+    """הערכה למוצרים שחסרים בסניף (לפי המחיר באזור) – כדי שההפרש מול הקבלה יהיה ברור (למשל ₪966 + ~₪80 על 3 חסרים)"""
+    if not r.get("miss"): return ""
+    est = r["sum"] - r["have"]
+    return f" + ~₪{est:.0f} על {'מוצר אחד שחסר' if r['miss'] == 1 else str(r['miss']) + ' שחסרים'}"
+
 def compute(u):
     D = kdata.D
     pr = fill_prefs(dict(u["prefs"])); home = pr["home"]; car = pr["mode"] == "car"; bus = pr["mode"] == "bus"
@@ -688,12 +694,12 @@ def compute(u):
     ride = "🚗" if car else ("🚌" if bus else "🚶")
     if stay:
         L.append((f"👍 הסופר הקבוע שלך משתלם: *{s['n']}*" if reg else f"👍 הסופר הקרוב אליך משתלם: *{s['n']}*") + kosher_tag(s))
-        L.append(f"💰 מחיר הסל: *₪{best['have']:.0f}*" + (" (במחירי מועדון)" if best.get("club") else "")
+        L.append(f"💰 מחיר הסל: *₪{best['have']:.0f}*" + miss_est(best) + (" (במחירי מועדון)" if best.get("club") else "")
                  + (f"\n❌ _חסר בסניף: {', '.join(best['mlist'][:6])}_" if best["miss"] else ""))
         L.append(f"✅ זה הכי זול באזור 🏆" if gap < 1 else f"✅ במקום אחר היית חוסך רק ₪{gap:.0f}{inc} – לא שווה את הטרחה")
     else:
         L.append(f"🏆 הסופר המנצח: *{s['n']}*" + kosher_tag(s))
-        L.append(f"💰 מחיר הסל: *₪{best['have']:.0f}*" + (" (במחירי מועדון)" if best.get("club") else "")
+        L.append(f"💰 מחיר הסל: *₪{best['have']:.0f}*" + miss_est(best) + (" (במחירי מועדון)" if best.get("club") else "")
                  + (f"\n❌ _חסר בסניף: {', '.join(best['mlist'][:6])}_" if best["miss"] else ""))
         if ref:
             L.append(f"✅ חוסך *₪{gap:.0f}* לעומת {ref['s']['n']}" + ("" if reg else " (הקרוב אליך)") + inc)
@@ -729,7 +735,7 @@ def compute(u):
                       + "🏪 *כל הסופרים בטווח:*\n\n" + "\n\n".join(
                 f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} *{full_name(r['s'])}*" + (" ⭐ _הקבוע שלך_" if r is reg else "") + "\n"
                 + ("      ✡️ סניף כשר\n" if is_kosher(r["s"]) else "") +
-                f"      📍 {r['s']['a']}\n      💰 ₪{r['have']:.0f} · {ride} {round(r['min'])} דק'"
+                f"      📍 {r['s']['a']}\n      💰 ₪{r['have']:.0f}{miss_est(r)} · {ride} {round(r['min'])} דק'"
                 + (f"\n      ❌ _חסר בסניף: {', '.join(r['mlist'][:6])}_" if r["miss"] else "")
                 for r in (inrange[:10] + ([reg] if reg and reg not in inrange[:10] and reg in full else []))) + fresh,
             "split": split_txt}
