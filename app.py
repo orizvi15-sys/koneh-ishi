@@ -406,6 +406,15 @@ def basic_alias(name):
     n = re.sub(r'(\d+(\.\d+)?|ק"ג|קג|קילו|ק\'|גרם|גר\'?|יחידות|יח\'?|תבנית|ארוז(ה|ים)?|טרי(ים|יה|ה)?|רגיל(ה|ים)?|[–\-:,()])', " ", name)
     return BASIC_ALIAS.get(" ".join(n.split()))
 
+def generic_pick(name, cand):
+    """לשם כללי (בלי מותג/גודל): האפשרות הראשונה שכל המילים שנכתבו מופיעות בה, והשם שלה מתחיל באותה מילה ("פסטה" → "פסטה ספגטי אסם")"""
+    d = kdata.D; q = [kdata.stem(w) for w in kdata.toks(name) if not re.fullmatch(r"[\d.]+", w)]
+    if not q or len(q) > 2: return None
+    for k in cand:
+        t = [kdata.stem(w) for w in kdata.toks(d.items[k][1])]
+        if t and t[0] == q[0] and set(q) <= set(t): return k
+    return None
+
 def match_items(items):
     d = kdata.D
     def cands(name):
@@ -423,7 +432,8 @@ def match_items(items):
     picks = [c[0] if c else None for c in cand]
     if CLAUDE_KEY and any(len(c) > 1 for c in cand):
         res = claude_json("Match each Israeli supermarket item to the option that is the SAME product (type, brand if given, similar size). "
-                          "If none fits, null. Reply only a JSON array like [{\"i\":0,\"pick\":2}].\n\n" +
+                          "A generic name with no brand/size (e.g. 'פסטה', 'אורז', 'שמן') matches the most standard everyday option of that kind – never null for it. "
+                          "Null only if no option is that kind of product. Reply only a JSON array like [{\"i\":0,\"pick\":2}].\n\n" +
                           json.dumps([{"i": i, "item": it["name"], "options": [d.items[k][1] for k in cand[i]]} for i, it in enumerate(items)], ensure_ascii=False))
         if isinstance(res, list):
             for r in res:
@@ -431,6 +441,8 @@ def match_items(items):
                     i = int(r["i"]); k = r.get("pick")
                     picks[i] = None if k is None or not cand[i] or int(k) >= len(cand[i]) else cand[i][int(k)]
                 except Exception: pass
+    for i, it in enumerate(items):                     # שם כללי ("פסטה") – מוצר בסיסי לא יוצא "לא מצאתי" גם אם Claude לא בחר
+        if picks[i] is None and cand[i]: picks[i] = generic_pick(it["name"], cand[i])
     found = [dict(item_of(d, picks[i], it["qty"], it["name"]), c=[d.items[k][0] for k in cand[i] if k != picks[i]][:4])
              for i, it in enumerate(items) if picks[i] is not None]
     missed = [it["name"] for i, it in enumerate(items) if picks[i] is None]

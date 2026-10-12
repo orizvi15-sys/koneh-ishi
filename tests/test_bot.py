@@ -460,6 +460,24 @@ def _():
     app.merge_users(newer); assert to not in app.USERS, "משתמש שנמחק חזר מהזיכרון הישן"
     send(to, "היי"); assert to in app.USERS                                # אפשר להתחיל מחדש
 
+@test("מוצר בסיסי בשם כללי ('פסטה') נמצא תמיד, גם כש-Claude לא בוחר – באג 12/10 (אשדוד)")
+def _():
+    orig = app.claude_json
+    def null_match(prompt, *a, **k):
+        if prompt.startswith("Match"):
+            return [{"i": i, "pick": None} for i in range(prompt.count('"item"'))]
+        return orig(prompt, *a, **k)
+    app.claude_json = null_match
+    try:
+        names = ["פסטה", "אורז", "שמן", "קמח", "סוכר", "קפה", "טונה", "במבה", "חמאה", "קוטג"]
+        found, missed = app.match_items([{"name": n, "qty": 1} for n in names])
+    finally: app.claude_json = orig
+    assert not missed, missed
+    got = {f["src"]: f["name"] for f in found}
+    assert got["פסטה"].startswith("פסטה") and got["סוכר"].startswith("סוכר ") and "סוכריות" not in got["סוכר"], got
+    found, missed = app.match_items([{"name": "פסטה", "qty": 1}, {"name": "חזה עוף", "qty": 1}])
+    assert not missed, missed
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:
