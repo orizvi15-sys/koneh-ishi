@@ -180,6 +180,8 @@ OSM_CHAIN = {"שופרסל": r"שופרסל|shufersal", "רמי לוי": r"רמ�
              "קינג סטור": r"קינג סטור|king ?store", "זול ובגדול": r"זול ובגדול|zol", "סופר יודה": r"סופר יודה|yuda",
              "שוק העיר": r"שוק העיר", "שפע ברכת השם": r"שפע ברכת|ברכת השם", "ברקת": r"ברקת|bareket", "סיטי מרקט": r"סיטי מרקט|city ?market",
              "סטופ מרקט": r"סטופ מרקט|stop ?market", "פוליצר": r"פוליצר|polizer", "סאלח דבאח": r"דבאח|dabach", "ח. כהן": r"ח\.? ?כהן"}
+OSM_SUB = {"שלי", "דיל", "אקספרס", "יוניברס", "ביג", "היפר", "be", "מתחם", "מיני", "סיטי", "ליקוט", "המכולת", "שלנו", "צומת",
+           "יש", "חסד", "קינג", "סטור", "טעם", "טיב", "ספיר", "יילו", "פז", "ampm", "אלונית", "שוק", "העיר", "online"}
 OSM_STOP = {"סניף", "סופר", "מרקט", "the", "ת", "בע\"מ", "ברחוב", "רחוב", "שד", "מרכז"}
 
 def osm_locate(stores, osm):
@@ -201,9 +203,15 @@ def osm_locate(stores, osm):
         if not cand: continue
         mine = words(s.get("name", "").replace(s.get("chain", ""), "")) | words(s.get("addr", "")) | words(s.get("city", ""))
         mine -= words(s.get("chain", ""))
+        mine -= OSM_SUB                                        # "שלי"/"דיל"/"מתחם" – לא אומרים איפה הסניף
+        mine -= words(s.get("city", "")) | {"שבע", "באר", "תל", "אביב", "יפו", "קרית", "קריית", "ים", "רמת", "גן", "בית"}   # שם העיר לבד לא מספיק
+        mine = {w for w in mine if len(w) >= 3}
+        cand = [(j, p) for j, p in cand if dist_km(p[0], s["p"]) < 10]
+        if not cand or not mine: continue
         scored = sorted(((len(mine & p[2]), -dist_km(p[0], s["p"]), j, p) for j, p in cand), reverse=True)
         best = scored[0]
-        if best[0] == 0 and len(cand) > 1: continue           # כמה סניפים של הרשת באזור ואין רמז איזה – לא מנחשים
+        # רק עם ראיה ברורה: שם מקום/רחוב משותף לסניף ולסופר במפה (לא מנחשים לפי "הסניף היחיד באזור")
+        if best[0] == 0 or (len(scored) > 1 and scored[1][0] == best[0]): continue
         used.add(best[2]); s["p"], s["prec"] = best[3][0], "osm"; fixed += 1
     return fixed
 
@@ -358,7 +366,8 @@ def main():
     # ---- OpenStreetMap (חינם): סניפים שמיקומם רק לפי עיר/שם – מחפשים את הסופר במפה הפתוחה לפי רשת + שם + אזור ----
     osm = load_json(a.osm, []) if a.osm else []
     if osm:
-        fixed = osm_locate(stores, osm)
+        try: fixed = osm_locate(stores, osm)
+        except Exception as ex: fixed = 0; print("openstreetmap step failed (ignored):", ex)
         print("openstreetmap: stores located:", fixed, "of", sum(1 for s in stores.values() if s.get("prec") in ("city", "name")) + fixed)
     json.dump(geo, open(a.geocache, "w", encoding="utf-8"), ensure_ascii=False)
     located = {k: s for k, s in stores.items() if s.get("p")}
