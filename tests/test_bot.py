@@ -627,6 +627,38 @@ def _():
     q = {x["src"]: x["qty"] for x in f}
     assert q["הודו טחון"] == 1 and q["עגבניה"] == 1.35 and q["במבה"] == 3, q
 
+@test("לימוד עצמי: שם חדש של מוצר בסיסי נלמד לבד (בלי שרי/הודו/קפוא/פלפל אחר), ושומר מוצרים בסיסיים מתריע רק על חדש – 12/10")
+def _():
+    D = kdata.D
+    fb = lambda c: {D.items[j][1] for j in D.fallback(D.code2i[c])}
+    tom, pep, beef, chick = fb("P01"), fb("P04"), fb("M08"), fb("M01")
+    assert not any("שרי" in n for n in tom), [n for n in tom if "שרי" in n]
+    assert not any(re.search(r"חריף|שושקה|צ.ילי|רמירו", n) for n in pep), sorted(pep)   # צהוב/בהיר – כלל ישן ומכוון (FB_FAMILY)
+    assert not any(re.search(r"עוף|לבן|הודו|עגל", n) for n in beef), sorted(beef)
+    assert not any(re.search(r"הודו|קפוא|בקר|טחון", n) for n in chick), sorted(chick)
+    # התנהגות: פריט "חדש" עם אותו שם בסיסי ומחיר דומה – נכנס; אותו שם במחיר כפול – לא
+    i = D.code2i["P01"]; core = lambda t: {kdata.stem(w).rstrip("י") for w in kdata.toks(t) if w not in kdata.FB_NEUTRAL}
+    p0 = D.items[i][3]
+    D.items.append(["W:test1", 'עגבניות טבע חדש (לק"ג)', 5, p0]); D.items.append(["W:test2", 'עגבניות טבע יקר (לק"ג)', 5, p0 * 3])
+    try:
+        j1, j2 = len(D.items) - 2, len(D.items) - 1
+        assert D.learned_alt(i, j1, core(D.items[i][1]), core) and not D.learned_alt(i, j2, core(D.items[i][1]), core)
+    finally:
+        del D.items[-2:]
+    # שומר: פעם ראשונה – שקט; בעיה ידועה – שקט; בעיה חדשה – התראה למנהל
+    meta = app.USERS.setdefault("_meta", {}); meta.pop("basics_known", None); app._basics["day"] = ""
+    orig = app.basic_coverage
+    try:
+        app.basic_coverage = lambda: [("רשת א", "עגבנייה", 9, 10, ["עגבניות טבע (לק\"ג)"])]
+        OUT.clear(); app.basics_daily(); assert not any("שומר מוצרים" in t for t in texts()), "שלח בהפעלה ראשונה"
+        app._basics["day"] = ""; OUT.clear(); app.basics_daily(); assert not any("שומר מוצרים" in t for t in texts()), "שלח שוב בעיה ידועה"
+        app.basic_coverage = lambda: [("רשת א", "עגבנייה", 9, 10, []), ("רשת ב", "בננה", 7, 8, ["בננה טבע (לק\"ג)"])]
+        app._basics["day"] = ""; OUT.clear(); app.basics_daily()
+        t = "\n".join(texts()); assert "רשת ב" in t and "בננה טבע" in t and "רשת א" not in t, t
+        assert "מוצרים בסיסיים שחסרים" in app.weekly_report()
+    finally:
+        app.basic_coverage = orig; meta.pop("basics_known", None); meta.pop("basics_last", None)
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

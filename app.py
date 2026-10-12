@@ -11,7 +11,7 @@ Python 3 בלבד, בלי ספריות חיצוניות.
   CLAUDE_MODEL       – (לא חובה) ברירת מחדל claude-sonnet-5-5
   PORT               – Render קובע אותו לבד
 """
-import json, math, os, re, sys, threading, time, base64, urllib.request, urllib.error
+import json, math, os, re, sys, threading, time, base64, urllib.request, urllib.error, collections
 try: sys.stdout.reconfigure(line_buffering=True); sys.stderr.reconfigure(line_buffering=True)
 except Exception: pass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -413,9 +413,10 @@ BASIC_ALIAS = {"בצל": "P10", "בצלים": "P10", "בצל יבש": "P10", "ת
 # שם אחר שבו המוצר מופיע ברשתות ("שקיות זבל" = "שקיות אשפה")
 SEARCH_SYN = {"שקיות זבל": "שקיות אשפה", "נייר אלומיניום": "נייר כסף", "חלב סויה": "משקה סויה", "חלב שקדים": "משקה שקדים",
               "חלב שיבולת שועל": "משקה שיבולת שועל", "חלב אורז": "משקה אורז", "חלות": "חלה", "מלפפון חמוץ": "מלפפונים במלח",
-              "מלפפונים חמוצים": "מלפפונים במלח", "חמוצים": "מלפפונים במלח", "ירקות קפואים": "ירקות מוקפאים", "תותים": "תות שדה",
+              "מלפפונים חמוצים": "מלפפונים במלח", "חמוצים": "מלפפונים במלח", "תירס שימורים": "תירס גרעינים",
+              "שימורי תירס": "תירס גרעינים", "תירס בקופסה": "תירס גרעינים", "ירקות קפואים": "ירקות מוקפאים", "תותים": "תות שדה",
               "ניקוי רצפות": "נוזל לניקוי רצפות", "ציפס קפוא": "צ'יפס קפוא", "וניל": "סוכר וניל", "פרורי לחם": "פירורי לחם",
-              "סבון ידיים": "סבון נוזלי לידיים", "מטהר אוויר": "מטהר אויר"}
+              "מטהר אוויר": "מטהר אויר"}
 
 WFB_SKIP = ("מתובל", "המבורגר", "קציצ", "קבב", "שניצל", "נקניק", "שיפוד", "צמחי", "טבעוני", "מעושן", "ממולא", "מבושל", "מוכן")
 
@@ -453,12 +454,29 @@ def generic_pick(name, cand):
         if t and t[0] == q[0] and set(q) <= set(t): return k
     return None
 
+def common_first(name, c):
+    """שם כללי קצר ("תירס שימורים", "סבון ידיים"): אם המועמד הראשון נמכר במעט סניפים לעומת מועמד אחר מאותו סוג – הנפוץ קודם.
+    (בלי זה נבחר לפעמים מוצר נדיר, והסל יוצא "חסר בסניף" כמעט בכל מקום.)"""
+    d = kdata.D; t = kdata.toks(name)
+    if not c or len(t) > 3 or any(ch.isdigit() for ch in name) or not d.items[c[0]][0][:1].isdigit(): return c
+    q = {kdata.stem(w) for w in t}
+    q |= {kdata.stem(w) for w in kdata.toks(SEARCH_SYN.get(" ".join(t), ""))}
+    first = d.items[c[0]][0][:1]
+    def kind(j): return {kdata.stem(w) for w in kdata.toks(d.items[j][1])}
+    same = [j for j in c[:6] if d.items[j][0][:1].isdigit() and len(q & kind(j)) >= min(2, len(q & kind(c[0])))]
+    if not same: return c
+    top = max(same, key=lambda j: d.items[j][2])
+    if d.items[c[0]][2] < 0.25 * d.items[top][2]:
+        return [top] + [j for j in c if j != top]
+    return c
+
 def match_items(items):
     d = kdata.D
     def cands(name):
         alt = SEARCH_SYN.get(" ".join(kdata.toks(name)))
         c = d.search(alt) if alt else []
         c += [j for j in d.search(name) if j not in c]
+        c = common_first(name, c)
         m = re.search(r"(?<!\d)(1[8-9]|[2-9]\d)(?!\d)", name) if re.search(r"ביצ", name) else None
         if m:                                            # "ביצים 30" – קודם תבניות של 30 (החיפוש הרגיל מעדיף את ה-12 הנפוצה)
             pk = sorted((j for j in d.search(name, 60) if m.group(1) in d.itoks[j] and d.items[j][1].startswith("ביצ")
@@ -1204,9 +1222,66 @@ def weekly_report():
         L += ["", "🔎 *מוצרים שהבוט לא מצא* (כדאי ללמד אותו):"] + [f"• {n} ×{c}" for n, c in top(w["notfound"])]
     if w.get("missing"):
         L += ["", "❌ *יצאו \"חסר\" בסופר המומלץ הכי הרבה:*"] + [f"• {n} ×{c}" for n, c in top(w["missing"])]
+    bl = meta.get("basics_last") or []
+    if bl:
+        L += ["", "🥬 *מוצרים בסיסיים שחסרים ברוב הסניפים של רשת* (שם אחר בקבצים / לא נמכר טרי):"]
+        L += [f"• {b[0]}: {b[1]} – {b[2]}/{b[3]} סניפים" for b in sorted(bl, key=lambda b: -b[2] / max(b[3], 1))[:12]]
     return "\n".join(L)
 
 _weekly_sent = {"wk": ""}
+# ---------- שומר מוצרים בסיסיים: הבוט מזהה לבד שם חדש של מוצר בסיסי (לימוד עצמי, 12/10) ----------
+# כל יום: לכל רשת – באיזה חלק מהסניפים כל מוצר בסיסי "חסר". אם פתאום חסר בהרבה סניפים של רשת, כנראה הרשת שינתה את השם
+# ("עגבניות טבע" במקום "עגבנייה"). מתריעים לאורי עם השמות הדומים שנמצאו, כדי שאפשר יהיה להוסיף כלל (או שהלימוד העצמי כבר תפס).
+BASIC_WATCH = ["P01", "P03", "P10", "P12", "P16", "P28", "P39", "P04", "P29", "E01", "M01", "M07", "M08", "M02"]
+_basics = {"day": ""}
+
+def basic_coverage(min_stores=5, bad_share=0.4):
+    """[(רשת, מוצר, חסרים, סניפים, [שמות דומים בסניפים האלה])] – רק בעיות"""
+    D = kdata.D
+    if not D: return []
+    its = []
+    for c in BASIC_WATCH:
+        i = D.code2i.get(c)
+        if i is not None: its.append({"name": D.items[i][1], "qty": 1, "i": i, "g": [i], "fb": D.fallback(i), "wfb": None})
+    by = {}
+    for st in D.stores:
+        if st["chain"] in ("יילו", "דור אלון", "סופר יודה") or re.search(r"\bBE\b|Be\b|אקספרס|AM|PM", st["n"]): continue
+        by.setdefault(st["chain"], []).append(st)
+    out = []
+    for ch, sts in by.items():
+        if len(sts) < min_stores: continue
+        miss = {k: [] for k in range(len(its))}
+        for st in sts:
+            P = D.store_prices(st, ())
+            if len(P) < 1500: continue                       # סניף קטן/קובץ חלקי – לא מעיד על הרשת
+            for k, it in enumerate(its):
+                if lc(P, it) is None: miss[k].append(P)
+        n = sum(1 for st in sts if len(D.store_prices(st, ())) >= 1500)
+        for k, Ps in miss.items():
+            if n >= min_stores and len(Ps) >= bad_share * n:
+                w0 = D.meta(its[k]["i"])[0]; sim = collections.Counter()
+                for P in Ps[:15]:
+                    for j in P:
+                        if D.meta(j)[0] == w0 and j not in its[k]["fb"] and j != its[k]["i"]: sim[D.items[j][1]] += 1
+                out.append((ch, its[k]["name"].replace(' (לק"ג)', ""), len(Ps), n, [x for x, _ in sim.most_common(3)]))
+    return out
+
+def basics_daily():
+    """פעם ביום (אחרי 08:00): התראה לאורי רק על בעיה חדשה – בעיה שכבר דווחה לא נשלחת שוב"""
+    il = _dt.now(IL_TZ); day = il.strftime("%Y-%m-%d")
+    if il.hour < 8 or _basics["day"] == day: return
+    _basics["day"] = day
+    meta = USERS.setdefault("_meta", {}); first = "basics_known" not in meta; known = set(meta.get("basics_known") or [])
+    probs = basic_coverage(); keys = {f"{ch}|{nm}" for ch, nm, *_ in probs}
+    new = [p for p in probs if f"{p[0]}|{p[1]}" not in known]
+    meta["basics_known"] = sorted(keys); meta["basics_last"] = probs[:40]; save_users()
+    if first or not new: return                              # הפעם הראשונה – רק שומרים מצב התחלתי (הרשימה המלאה בדוח השבועי)
+    L = ["🥬 *שומר מוצרים בסיסיים* – מוצר בסיסי \"נעלם\" ברשת (כנראה שם חדש בקבצים):", ""]
+    for ch, nm, k, n, sim in new[:12]:
+        names = ", ".join(x.replace(' (לק"ג)', "") for x in sim)
+        L.append(f"⚠️ {ch}: *{nm}* חסר ב-{k} מתוך {n} סניפים" + (f"\n      שמות דומים שם: {names}" if sim else ""))
+    for a in [a for a in admins() if is_tg(a)]: send_text(a, "\n".join(L))
+
 def weekly_report_tick():
     """כל יום ראשון ב-10:00 – שולחים את הדוח ומאפסים את המונים"""
     il = _dt.now(IL_TZ)
@@ -1231,6 +1306,8 @@ def _reminder_loop():
         except Exception as ex: print("selftest error", ex, flush=True)
         try: weekly_report_tick()
         except Exception as ex: print("weekly report error", ex, flush=True)
+        try: basics_daily()
+        except Exception as ex: print("basics watch error", ex, flush=True)
         now = time.time()
         for to, u in list(USERS.items()):
             try:

@@ -21,6 +21,7 @@ import os, re, sys, time, random, collections
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 QUICK = "--quick" in sys.argv
+WIDE = "--wide" in sys.argv or not QUICK          # ברירת מחדל: גם קבלות בכל הערים
 sys.argv = [sys.argv[0]]
 _src = open(os.path.join(ROOT, "tests", "test_bot.py"), encoding="utf-8").read()
 __file__ = os.path.join(ROOT, "tests", "test_bot.py")
@@ -277,6 +278,74 @@ def chat_round():
             main = [t for t in texts() if "מחיר הסל" in t]
             if not main or "חיפה" not in main[-1]: issue("שיחה – החלפת מיקום", f"{name}: {main[-1][:120] if main else 'אין תוצאה'}")
 
+# ================= 6. קבלות בכל הערים (--wide) =================
+# שורות כמו בקבלה אמיתית (קיצורים, משקלים). הקבלה "נלקחת" מסניף אמיתי בכל עיר שיש בה סופרמרקט.
+RCPT_LINES = [("חלב תנובה 3% 1ל", 1, 3), ("חלב 3% 2 ליטר", 1, 2), ("חלב 1% טרה", 1, 2), ("קוטג' 5% 250ג", 1, 3), ("גבינה לבנה 5%", 1, 2),
+    ("עמק פרוס 28%", 1, 1), ("גבינה בולגרית 5%", 1, 1), ("יוגורט דנונה", 1, 4), ("שמנת חמוצה 15%", 1, 1), ("חמאה 200ג", 1, 1),
+    ("ביצים L 12", 1, 2), ("ביצים M 30", 1, 1), ("לחם אחיד פרוס", 1, 2), ("לחם מלא", 1, 1), ("פיתות 10 יח", 1, 1), ("חלה", 1, 2),
+    ("עגבניה", 0.6, 2.2), ("מלפפון", 0.5, 1.8), ("בצל יבש", 0.4, 1.5), ('תפו"א לבן', 1.0, 3.5), ("גזר", 0.4, 1.2), ("בננה", 0.8, 2.0),
+    ("תפוח עץ", 0.6, 1.6), ("לימון", 0.2, 0.6), ("אבוקדו", 0.3, 1.0), ("פלפל אדום", 0.3, 0.9), ("חסה", 1, 1), ("פטרוזיליה", 1, 1),
+    ("חזה עוף טרי", 0.8, 1.8), ("שניצל עוף", 0.6, 1.4), ("פרגיות", 0.6, 1.3), ("שוקיים", 1.0, 2.5), ("עוף שלם", 1.8, 2.6),
+    ("בשר טחון", 0.5, 1.2), ("כנפיים", 0.8, 1.6), ("פילה סלמון", 0.4, 0.8), ("נקניקיות עוף", 1, 2), ("פסטרמה הודו", 1, 1),
+    ("פסטה ספגטי", 1, 3), ("אורז פרסי 1 ק", 1, 1), ("קמח לבן 1ק", 1, 1), ("סוכר לבן 1ק", 1, 1), ("שמן קנולה 1ל", 1, 2), ("שמן זית", 1, 1),
+    ("טונה במים 4*160", 1, 1), ("רסק עגבניות", 1, 2), ("קטשופ", 1, 1), ("מיונז", 1, 1), ("טחינה", 1, 1), ("חומוס", 1, 2),
+    ("תירס שימורים", 1, 2), ("קפה נמס", 1, 1), ("תה ויסוצקי", 1, 1), ("במבה 80ג", 1, 4), ("ביסלי גריל", 1, 3), ("שוקולד פרה", 1, 3),
+    ("עוגיות", 1, 1), ("קולה 1.5 ל", 1, 6), ("מים מינרליים 1.5", 1, 6), ("מיץ תפוזים", 1, 2), ("נייר טואלט 32", 1, 1),
+    ("נוזל כלים", 1, 1), ("אבקת כביסה", 1, 1), ("שקיות אשפה", 1, 1), ("סבון ידיים", 1, 1), ("שמפו", 1, 1), ("משחת שיניים", 1, 2),
+    ("מגבונים", 1, 2), ("חיתולים", 1, 1), ("דגני בוקר", 1, 1), ("זיתים", 1, 1), ("מלפפון חמוץ", 1, 1), ("שוקו", 1, 2)]
+
+def wide_round(n=200):
+    rnd = random.Random(int(time.strftime("%U")) + 7)
+    by_city = collections.defaultdict(list)
+    for s in SUPER:
+        c = s["a"].split(",")[-1].strip() if "," in s["a"] else ""
+        if c and not re.search(r"אקספרס|AM|PM", s["n"]): by_city[c].append(s)
+    cities = sorted(by_city)
+    picks = [(c, rnd.choice(by_city[c])) for c in cities]
+    big = [c for c in cities if len(by_city[c]) >= 8]
+    while len(picks) < n and big: c = rnd.choice(big); picks.append((c, rnd.choice(by_city[c])))
+    stats = collections.Counter(); out = []
+    for k, (city, st) in enumerate(picks[:n]):
+        home = [st["p"][0] + rnd.uniform(-0.012, 0.012), st["p"][1] + rnd.uniform(-0.012, 0.012)]   # עד ~1.5 ק"מ מהסניף
+        br = st["n"][len(st["chain"]):].strip(" -–") if st["n"].startswith(st["chain"]) else st["n"]
+        txt = rnd.choice([f"{st['chain']} – {br}", f"{st['n']} {city}", f"{st['chain']} סניף {br}, {st['a']}"])
+        if rnd.random() < 0.3: txt = txt.replace("קרית", "קריית")
+        lines = rnd.sample(RCPT_LINES, rnd.randint(6, 14))
+        items = [{"name": nm, "qty": round(rnd.uniform(lo, hi), 2) if lo != int(lo) or hi != int(hi) else rnd.randint(int(lo), int(hi))}
+                 for nm, lo, hi in lines]
+        to = f"tg:w{k}"; app.USERS[to] = mkuser(home); app.USERS[to]["items"] = []
+        def fake_rcpt(prompt, image=None, mime=None, keep_dict=False, _st=txt, _it=items):
+            if prompt.startswith(app.RECEIPT_PROMPT[:40]) and image: return {"store": _st, "items": _it, "quality": "ok", "issue": ""}
+            return fake_claude(prompt, image, mime, keep_dict)
+        app.claude_json = fake_rcpt; OUT.clear()
+        try: photo(to)
+        except Exception as ex: issue("כל הערים – קריסה", f"{city}: {ex}"); continue
+        finally: app.claude_json = fake_claude
+        u = app.USERS[to]; stats["קבלות"] += 1
+        if any("משהו השתבש" in t for t in texts()): issue("כל הערים – 'משהו השתבש'", f"{city} / {txt}"); continue
+        if u.get("step") == "forgot": press(to, "noadd")
+        main = next((t for t in texts() if "מחיר הסל" in t), None)
+        rk = app.usual_store(u)
+        if rk == st["key"]: stats["סניף זוהה נכון"] += 1
+        else:
+            r_ = next((s for s in D.stores if s["key"] == rk), None)
+            if r_ and r_["chain"] == st["chain"] and app.km(st["p"], r_["p"]) < 1.5: stats["סניף שכן מאותה רשת"] += 1
+            else: issue("כל הערים – זיהוי סניף מהקבלה", f"{city}: '{txt}' → {r_['n'] + ' (' + r_['a'] + ')' if r_ else 'לא זוהה'}; נכון: {st['n']} ({st['a']})")
+        if not main: issue("כל הערים – אין תוצאה", f"{city}: {[re.sub(r'<[^>]+>', '', t)[:90] for t in texts()[-2:]]}"); continue
+        clean = re.sub(r"<[^>]+>", "", main)
+        m = re.search(r"(\d+) דק' נסיעה", clean); mins = int(m.group(1)) if m else None
+        best = next((s for s in D.stores if s["n"] == (u.get("last") or {}).get("store")), None)
+        if mins and mins > 25:
+            near = min(SUPER, key=lambda s: app.km(home, s["p"]))
+            if app.car_min(app.km(home, near["p"])) < 12: issue("כל הערים – נשלח רחוק", f"{city}: {mins} דק' ל{best['n'] if best else '?'}")
+        if re.search(r"מחיר הסל: ₪0\b", clean): issue("כל הערים – מחיר ₪0", f"{city}: {clean[:120]}")
+        if u.get("missed"): issue("כל הערים – שורה מהקבלה לא נמצאה", f"{city}: {u['missed']}")
+        mm = re.search(r"חסר בסניף: ([^\n]*)", clean)
+        if mm and best and best["chain"] not in IL_CHAINS:
+            for x in mm.group(1).split(", "): stats["חסר: " + x[:40]] += 1
+        stats["המלצה: נשארים" if "משתלם" in clean else "המלצה: לעבור"] += 1
+    return stats
+
 # ================= הרצה =================
 def main():
     t0 = time.time()
@@ -289,12 +358,22 @@ def main():
     rows = location_round(found); print("✓ מיקומים")
     rc = receipts_round(); print("✓ קבלות")
     chat_round(); print("✓ שיחות")
+    wide = wide_round(200 if "--wide" in sys.argv[1:] or WIDE else 0) if (WIDE or not QUICK) else collections.Counter()
+    if wide: print("✓ קבלות בכל הערים")
     print("\n=== מיקומים ===\n" + "\n".join(rows))
     print("\n=== קבלות ===\n" + "\n".join(rc))
+    if wide:
+        print(f"\n=== קבלות בכל הערים: {wide['קבלות']} ===")
+        for k, v in wide.most_common():
+            if not k.startswith("חסר: ") or v >= 3: print(f"  {k}: {v}")
     n = sum(len(v) for v in ISSUES.values())
     print(f"\n========== {n} ממצאים ({time.time() - t0:.0f} שנ') ==========")
     if stale: print(f"ℹ️ רשתות השרת הישראלי עם מחירים ישנים (לא באג בבוט): {', '.join(stale)}")
     if other_stale: print(f"⚠️ רשתות אחרות שלא התעדכנו 48 שעות: {', '.join(other_stale)}")
+    cov = app.basic_coverage()
+    if cov:
+        print(f"\n## שומר מוצרים בסיסיים – חסר ברוב הסניפים של רשת ({len(cov)}) – לבדוק אם שם חדש (תיקון) או באמת לא נמכר (לא באג)")
+        for ch, nm, k, n_, sim in cov: print(f"  - {ch}: {nm} {k}/{n_}" + (f" | דומים: {', '.join(sim)}" if sim else ""))
     for k, v in ISSUES.items():
         print(f"\n## {k} ({len(v)})")
         for m in v[:30]: print("  - " + m)
