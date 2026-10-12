@@ -444,6 +444,14 @@ def learned(u):
     L = [dict(item_of(d, i, round(v[1] / v[0] * 2) / 2 or 1, v[2]), freq=v[0]) for i, v in cnt.items() if v[0] >= mn]
     return sorted(L, key=lambda x: -x["freq"])
 
+# איפוס (וגם "להתחיל מחדש") מוחק גם את ההרגלים: קניות קודמות, הסופר הקבוע, קבלות – בקשה של אורי 12/10, כדי לבדוק את הבוט נקי.
+# זמני: כנראה ישתנה בהמשך. False = "איפוס" מוחק רק העדפות, ורק "איפוס מלא" מוחק הרגלים.
+RESET_CLEARS_HABITS = True
+
+def forget_habits(u):
+    u["hist"] = []
+    for k in ("receipts", "last_receipt", "stores", "rbuf_t", "note", "cam_tip", "missed", "pending"): u.pop(k, None)
+
 # ---------- חישוב ----------
 def km(a, b):
     r = math.radians; dla, dlo = r(b[0] - a[0]), r(b[1] - a[1])
@@ -1558,11 +1566,9 @@ def handle(msg):
         return send_text(to, ("✅ הבדיקה עברה – אותה רשימה, אותה תוצאה, כמויות תקינות" if not probs else
                               "🧪 *נמצאה בעיה*\n\n" + "\n".join("⚠️ " + p for p in probs[:12])) + ("\n\n" + summ if summ else ""))
     if text in ("אבחון מחדש", "אבחון", "איפוס", "איפוס מלא"):
-        full = text == "איפוס מלא"
+        full = text == "איפוס מלא" or (text == "איפוס" and RESET_CLEARS_HABITS)
         u["prefs"] = {}; u.pop("remind_at", None); u.pop("items", None); u.pop("last", None)
-        if full:
-            u["hist"] = []
-            for k in ("receipts", "last_receipt", "stores", "rbuf_t", "note", "cam_tip", "missed", "pending"): u.pop(k, None)
+        if full: forget_habits(u)
         save_users()
         return ask(to, "loc", u, intro=("🔄 " if not full else "🔄🧹 ") + welcome(u) + "\n\n")
     if re.fullmatch(r"(כמה חסכתי|חיסכון|סיכום|סיכום חיסכון|כמה חסכתי\?|/savings)", text):
@@ -1595,7 +1601,10 @@ def handle(msg):
             return send_buttons(to, welcome(u) + "\n\nיש לי את ההעדפות שלך מהפעם הקודמת.", [("keep", "להמשיך איתן"), ("reset", "להתחיל מחדש")])
         return ask(to, "loc", u, intro=welcome(u) + "\n\n")
     if reply == "keep": return ask(to, "basket", u)
-    if reply == "reset": u["prefs"] = {}; return ask(to, "loc", u)
+    if reply == "reset":
+        u["prefs"] = {}
+        if RESET_CLEARS_HABITS: forget_habits(u); save_users()
+        return ask(to, "loc", u)
 
     if t == "location":
         pr["home"] = [msg["location"]["latitude"], msg["location"]["longitude"]]; fill_prefs(pr)

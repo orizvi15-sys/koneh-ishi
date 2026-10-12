@@ -415,6 +415,19 @@ def _():
     u["prefs"]["home"] = [31.8948, 34.8113]                                # כשהמיקום ברחובות – כן נחשב קבוע
     assert app.usual_store(u) == reh["key"]
 
+@test("איפוס מוחק גם את ההרגלים (קניות קודמות, סופר קבוע, קבלות) – בקשה 12/10")
+def _():
+    for how in ("text", "button"):
+        to = "tg:3131"; setup_user(to, 32.0880, 34.8860)
+        u = app.USERS[to]
+        u["stores"] = {"7290873255550-87": 3}; u["receipts"] = [1]; u["last_receipt"] = 1
+        u["hist"] = [{"d": 1, "items": [{"name": "במבה", "qty": 1}], "store": "x"}]
+        if how == "text": send(to, "איפוס")
+        else: press(to, "reset")
+        u = app.USERS[to]
+        assert not u.get("hist") and "stores" not in u and "receipts" not in u, (how, u)
+        assert app.usual_store(u) is None and app.learned(u) == []
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:
