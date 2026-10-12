@@ -180,6 +180,14 @@ def _():
         assert good in f["name"], (f["src"], f["name"])
         if bad: assert bad not in f["name"], (f["src"], f["name"])
 
+@test("'תפוחים' כללי לא יוצא חסר ברמי לוי (כל זן תפוח עץ הוא חלופה) – באג 12/10")
+def _():
+    s0 = next(s for s in kdata.D.stores if s["n"] == "רמי לוי נתיבות")
+    found, _m = app.match_items([{"name": "תפוחים", "qty": 2}])
+    it = dict(found[0]); i = kdata.D.code2i[it["code"]]
+    it.update(i=i, g=kdata.D.group(i, "תפוחים"), fb=kdata.D.fallback(i, "תפוחים"))
+    assert app.lc(kdata.D.store_prices(s0, set()), it), "תפוחים חסר ברמי לוי נתיבות"
+
 @test("זיהוי בסיסי: 'בצל' → בצל יבש, 'ביצים M' → ביצים M")
 def _():
     assert app.basic_alias("בצל") == "P10"; assert app.basic_alias("ביצים M 12 יחידות") == "E02"
