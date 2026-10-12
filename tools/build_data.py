@@ -17,6 +17,9 @@ MAX_ITEMS = 65000
 # מיקומים שאומתו ידנית
 OVERRIDES = {
     "7290058140886-64": [32.5072, 34.9186],    # רמי לוי אור עקיבא – בקובץ רשום "חיפה"
+    "7290027600007-657": [33.2085, 35.5695],   # שופרסל Be קריית שמונה (קניון שמונה סנטר) – גוגל מיקם בת"א
+    "7290696200003-95": [31.6683, 34.5717],    # ויקטורי אשקלון מרכז (בן גוריון 1) – גוגל מיקם ברמת גן
+    "7290661400001-71": [31.7300, 34.7450],    # מחסני השוק 71 קריית מלאכי (צה"ל 1) – גוגל מיקם מחוץ לעיר
     "7290803800003-7": [31.8605, 34.8225],     # יוחננוף עקרון – "המלך חסן 1" מוקם בטעות בשדרות
     "7290027600007-106": [31.921009, 34.7933387], "7290055700007-422": [31.9220671, 34.8099931],
     "7290803800003-25": [31.930427, 34.7973195], "7290696200003-82": [31.914131, 34.7889942],
@@ -288,6 +291,16 @@ def main():
             if not p and s["name"]: p = google(f"{s['chain']} {s['name']}" + (f", {c}" if c else "")); used += 1
             if p: s["p"], s["prec"] = p, "google"; geo[ck] = [p, "google"]
         print("google geocoding queries:", used)
+        # גם תוצאת גוגל יכולה לטעות (שם רחוב שקיים בכמה ערים) – רחוקה מאוד מהעיר שלה → מרכז העיר
+        gbad = 0
+        for k, s in stores.items():
+            c = s.get("city"); p = s.get("p")
+            if s.get("prec") != "google" or not c or not p or len(pts.get(c, [])) < 3: continue
+            cc = center(c)
+            if cc and dist_km(p, cc) > max(25, 2 * radius(c)):
+                gbad += 1; print("google far from its city:", s["chain"], s["name"], c, round(dist_km(p, cc)), "km")
+                s["p"], s["prec"] = cc, "city"
+        print("google results moved to city center:", gbad)
         # ---- Google Places: סניפים שעדיין לא מדויקים – חיפוש לפי שם העסק ("רמי לוי אופקים") ----
         pdone = geo.setdefault("_places", {}); pused = 0
         for k, s in stores.items():
