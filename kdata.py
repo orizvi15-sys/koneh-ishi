@@ -64,7 +64,7 @@ FB_SKIP = ("מטוג", "קפוא", "מרוסק", "חתוכ", "כבוש", "מבו
            "פיקנטי", "חריף", "גמדי", "שאלוט", "ירוק", "שרי", "כסביה", "ארגני", "אורגני")
 FB_NEUTRAL = {"פרימיום", "ישראלי", "ישראלית", "בקרטון", "ארוז", "ארוזה", "ארוזים", "טרי", "טריה", "טרייה", "טריים", "לבן", "לבנה",
               "רגיל", "רגילה", "מובחר", "מובחרת", "סוג", "א", "שקית", "במשקל", "משקל", "תפזורת", "יבש", "L", "M", "XL", "S",
-              "לק\"ג", "לקג", "ק\"ג", "קג", "יח'", "יח", "יחידות"}
+              "לק\"ג", "לקג", "ק\"ג", "קג", "יח'", "יח", "יחידות", "פרימיום", "מגי", "אדומה", "אדומות"}
 FB_NEUTRAL_S = set()
 FB_VARIANT = ("בטעם", "טעם", "חמוץ", "חריף", "ממולא", "נוגט", "דיאט", "זירו", "לייט", "ללא", "נטול", "דל ", "מועשר", "אורגני",
               "מאנצ", "שוקולד", "וניל", "תות", "פיקנטי", "מעושן", "קפוא", "עיזים", "מקורמל", "סויה", "שקדים", "שיבולת",
@@ -201,7 +201,8 @@ class Data:
         if key in self._groups: return self._groups[key]
         code, name = self.items[i][0], self.items[i][1]
         if not FB_NEUTRAL_S: FB_NEUTRAL_S.update(stem(w) for w in FB_NEUTRAL)
-        core = lambda t: {stem(w) for w in toks(t) if not w[:1].isdigit() and w not in FB_NEUTRAL and stem(w) not in FB_NEUTRAL_S}
+        # stem(...).rstrip("י"): "עגבנייה"→"עגבנ" וגם "עגבניות"→"עגבני"→"עגבנ" (יחיד ורבים = אותו מוצר)
+        core = lambda t: {stem(w).rstrip("י") for w in toks(t) if not w[:1].isdigit() and w not in FB_NEUTRAL and stem(w) not in FB_NEUTRAL_S}
         out = []
         if code in FB_FAMILY and not any(w in (query or "") for w in FB_FAMILY[code][1]):   # "תפוחים" כללי → כל זן תפוח עץ
             out += [self.code2i[c] for c in FB_FAMILY[code][0] if c in self.code2i]

@@ -525,6 +525,31 @@ def _():
     to2 = "tg:3435"; setup_user(to2, 32.0809, 34.7806); send(to2, "במבה, חלב"); OUT.clear(); press(to2, "seen")
     assert "לפי מחלקות" not in texts()[-1]                                  # סל קטן – רשימה רגילה
 
+@test("עגבנייה לא 'חסר בסניף' כשיש 'עגבניות מגי' / 'עגבניה 05 פרימיום' (רבים, פרימיום) – באג 12/10 (חצי חינם רחובות, 23% מהסניפים)")
+def _():
+    D = kdata.D; app_rx = re.compile(r'^(עגבני(ות|יה|ה|ייה) (מגי|0?5 פרימיום|פרימיום)|מלפפון פרימיום|לימון פרימיום|בננה 0?5 פרימיום) \(לק"ג\)$')
+    alt = {j for j, it in enumerate(D.items) if it[0].startswith("W:") and app_rx.match(it[1])}
+    fb = {c: set(D.fallback(D.code2i[c])) for c in ("P01", "P03", "P39", "P28")}
+    for j in alt:
+        assert any(j in v for v in fb.values()), ("לא חלופה", D.items[j][1])
+    sts = [s for s in D.stores if s["chain"] in ("חצי חינם", "ויקטורי", "מחסני השוק")][:40]
+    for st in sts:
+        P = D.store_prices(st, ())
+        if any(j in P for j in alt if "עגבני" in D.items[j][1]):
+            i = D.code2i["P01"]
+            it = {"name": "עגבנייה", "qty": 1, "i": i, "g": [i], "fb": D.fallback(i), "wfb": None}
+            assert app.lc(P, it) is not None, st["n"]
+    # הכללים באיסוף הנתונים (מהעדכון הבא)
+    import importlib.util
+    src = open(os.path.join(ROOT, "tools", "collect.py"), encoding="utf-8").read()
+    ns = {"re": re}; exec(src[src.index("PRODUCE = ["):src.index("PRODUCE_RX =")], ns)
+    exec(src[src.index("def clean_produce"):src.index("# ---------- קריאת XML")], ns)
+    R = dict((n, re.compile(rx)) for n, rx in ns["PRODUCE"])
+    for name, want in (("עגבניות מגי", "עגבנייה"), ("עגבניה 05 פרימיום", "עגבנייה"), ("עגבניות", "עגבנייה"), ("בצל", "בצל יבש"),
+                       ("מלפפון פרימיום", "מלפפון"), ("עגבניות שרי תמר", None), ("עגבניות ירוקות", None), ("מלפפון במלח", None)):
+        got = [n for n, r in R.items() if r.search(ns["clean_produce"](name))]
+        assert got == ([want] if want else []), (name, got)
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:
