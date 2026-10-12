@@ -659,6 +659,34 @@ def _():
     finally:
         app.basic_coverage = orig; meta.pop("basics_known", None); meta.pop("basics_last", None)
 
+@test("קפוא כחלופה (אורי 12/10): אין חזה עוף/עוף שלם/בשר טחון טרי בסניף → הקפוא, עם 'במקום'; יש טרי → הטרי")
+def _():
+    D = kdata.D
+    for c, bad in (("M01", r"הודו|בקר|שניצל|מעושן"), ("M02", r"עגל|תירס|טבעול"), ("M07", r"טחון|שניצל|חזה|כנפ"), ("M08", r"עוף|הודו|קבב")):
+        fz = app.frozen_alts(D.code2i[c])
+        assert fz, c
+        names = [D.items[j][1] for j, _ in fz]
+        assert all(app.FROZEN_WORD.search(n) for n in names) and not any(re.search(bad, n) for n in names), (c, names[:6])
+    # סניף ברשת חרדית בלי חזה עוף טרי – יוצא קפוא (במקום), לא "חסר"
+    i = D.code2i["M01"]; fz = app.frozen_alts(i)
+    it = {"name": "חזה עוף", "qty": 1.5, "i": i, "g": [i], "fb": D.fallback(i), "wfb": None, "frz": fz}
+    hit = None
+    for st in D.stores:
+        if st["chain"] not in ("שפע ברכת השם", "נתיב החסד", "זול ובגדול", "ויקטורי"): continue
+        P = D.store_prices(st, ())
+        if i not in P and not any(j in P for j in it["fb"]) and any(j in P for j, _ in fz): hit = (st, P); break
+    assert hit, "לא נמצא סניף לבדיקה"
+    c = app.lc(hit[1], it)
+    assert c and c[2] and app.FROZEN_WORD.search(c[2]), c
+    for st in D.stores:                                                     # יש טרי – לא לוקחים קפוא
+        P = D.store_prices(st, ())
+        if i in P:
+            c = app.lc(P, it); assert c and c[2] is None, c; break
+    # מחיר: קפוא במשקל = מחיר לק"ג × כמות; קפוא ארוז = מספר אריזות
+    j, kg = next((j, kg) for j, kg in app.frozen_alts(D.code2i["M08"]) if kg)
+    P = kdata.Prices({j: 40.0}); it8 = {"name": "בשר טחון", "qty": 1.0, "i": D.code2i["M08"], "g": [D.code2i["M08"]], "fb": [], "wfb": None, "frz": [(j, kg)]}
+    assert abs(app.lc(P, it8)[0] - 40.0 * max(1, round(1.0 / kg))) < 0.01
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

@@ -629,7 +629,51 @@ def lc(P, it):
                     if c2 < c - 0.009: c, txt = c2, f"{k} ב־₪{money(bundle)}"
             if best is None or c < best[0]: best = (c, txt, kdata.D.items[g][1] if sub else None)
         if best: return best
+    fz = it.get("frz")                                 # אחרון-אחרון: אין טרי בכלל → אותו נתח קפוא (החלטה של אורי 12/10)
+    if fz:
+        best = None
+        for j, kg in fz:
+            if j not in P: continue
+            c = P[j] * it["qty"] if kg is None else P[j] * max(1, round(it["qty"] / kg))   # במשקל: לק"ג; ארוז: מספר אריזות
+            if best is None or c < best[0]: best = (c, None, kdata.D.items[j][1].replace(' (לק"ג)', ""))
+        if best: return best
     return None
+
+# ---------- קפוא כחלופה (אורי 12/10): בשר/עוף/דג טרי שאין בסניף בכלל → אותו נתח קפוא, עם "במקום: … קפוא" ----------
+FROZEN_WORD = re.compile(r"קפוא|מוקפא|קפואה|קפואים|(?<![א-ת])קפ(?![א-ת])")
+FROZEN_RX = {
+    "M01": r"^(פילה |נתחי )?(חזה( עוף| של עוף)?|פילה עוף)(?!.*(טחון|הודו|בקר|עגל|אווז|מעושן|שניצל|ציפוי|מתובל|נקניק|פסטרמה|ברווז))",
+    "M02": r"^שניצל(ים)?( עוף| חזה עוף| פרוס)?(?!.*(תירס|צמחי|טבעול|ציפוי|פריך|הצומח|ילדים|טבע|ג'ונגל|מצופה|תפו|עגל|בקר|הודו))",
+    "M03": r"^(פרגית|פרגיות)(?!.*(שיפוד|מתובל|ממולא|מרינד))",
+    "M04": r"^(כרעיים|כרעי)( עוף)?", "M05": r"^(שוקיים|שוקי)( עוף)?", "M06": r"^(כנפיים|כנפי)( עוף)?",
+    "M07": r"^עוף( שלם| מס\W{0,2} ?\d| בשקית| טרי| מוכשר| גלאט| כשר)*(?!.*(טחון|שניצל|נקניק|פסטרמה|מחולק|כנפ|שוק|כרע|חזה|לחמין|טוב|קורקבן|כבד|לבבות|צוואר|גב))",
+    "M08": r"^(בשר (בקר )?טחון|טחון בקר|בקר טחון)(?!.*(עוף|הודו|מתובל|קבב|המבורגר|עגל))",
+    "M09": r"^(בשר בקר(?! טחון)|צלי כתף|כתף בקר|בשר מס\W{0,2} ?\d)(?!.*(טחון|עוף|הודו|ראש|לחמין))",
+    "M10": r"^(סטייק )?אנטריקוט", "M11": r"^(פילה |נתח )?סלמון(?!.*(מעושן|גרבלקס|סושי|מתובל))",
+    "M12": r"^(דג |פילה )?(אמנון|מושט)", "M17": r"^(פילה )?(הייק|בקלה|מרלוזה)",
+}
+_frz = {"v": None, "c": {}}
+
+def frozen_alts(i):
+    """[(אינדקס, ק"ג באריזה או None למוצר במשקל)] – גרסאות קפואות של נתח בשר/עוף/דג מאוחד, במחיר לק"ג סביר"""
+    D = kdata.D; code = D.items[i][0]
+    if code not in FROZEN_RX: return []
+    if _frz["v"] != D.version: _frz.update(v=D.version, c={})
+    if i in _frz["c"]: return _frz["c"][i]
+    rx = re.compile(FROZEN_RX[code]); p0 = D.items[i][3] / 100 or None; out = []
+    for j, it in enumerate(D.items):
+        nm = it[1]
+        if j == i or not FROZEN_WORD.search(nm) or not rx.search(nm.replace("`", "'")): continue
+        if it[0].startswith("W:"): kg = None; per = it[3] / 100
+        elif it[0][:1].isdigit():
+            g = kdata.parse_size(nm) or ((lambda m: float(m.group(1)) * 1000)(re.search(r"(\d+(?:\.\d+)?)\s*ק(?![א-ת])", nm)) if re.search(r"(\d+(?:\.\d+)?)\s*ק(?![א-ת])", nm) else None)
+            if not g or g < 300: continue
+            kg = g / 1000; per = it[3] / 100 / kg
+        else: continue
+        if p0 and not 0.3 * p0 <= per <= 1.4 * p0: continue    # מחיר לק"ג לא הגיוני לאותו נתח – לא חלופה
+        out.append((j, kg))
+    _frz["c"][i] = out
+    return out
 
 def miss_est(r):
     """הערכה למוצרים שחסרים בסניף (לפי המחיר באזור) – כדי שההפרש מול הקבלה יהיה ברור (למשל ₪966 + ~₪80 על 3 חסרים)"""
@@ -655,7 +699,7 @@ def compute(u):
             g = [i] if mine else D.group(i, q)
             wf = None if mine or not D.items[i][0][:1].isdigit() else weighed_fb(D.items[i][1])
             if wf: wf = (D.code2i[wf[0]], wf[1]) if wf[0] in D.code2i else None
-            items.append(dict(it, i=i, g=g, fb=[] if mine else D.fallback(i, q), wfb=wf))
+            items.append(dict(it, i=i, g=g, fb=[] if mine else D.fallback(i, q), wfb=wf, frz=[] if mine else frozen_alts(i)))
     if not items:
         return ["לא מצאתי אף אחד מהמוצרים במאגר המחירים העדכני 🙁 נסה לכתוב אותם שוב."]
     near = sorted(((km(home, s["p"]), s) for s in D.stores), key=lambda x: x[0])
@@ -1242,7 +1286,7 @@ def basic_coverage(min_stores=5, bad_share=0.4):
     its = []
     for c in BASIC_WATCH:
         i = D.code2i.get(c)
-        if i is not None: its.append({"name": D.items[i][1], "qty": 1, "i": i, "g": [i], "fb": D.fallback(i), "wfb": None})
+        if i is not None: its.append({"name": D.items[i][1], "qty": 1, "i": i, "g": [i], "fb": D.fallback(i), "wfb": None, "frz": frozen_alts(i)})
     by = {}
     for st in D.stores:
         if st["chain"] in ("יילו", "דור אלון", "סופר יודה") or re.search(r"\bBE\b|Be\b|אקספרס|AM|PM", st["n"]): continue
