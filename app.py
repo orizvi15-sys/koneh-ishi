@@ -522,17 +522,26 @@ def compute(u):
     for it in items:
         v = sorted(x for x in (gp(r["P"], it) for r in rows) if x is not None)
         med[it["i"]] = v[len(v) // 2] if v else D.items[it["i"]][3] / 100
-    for r in rows:
-        tot = 0; miss = 0; mlist = []; have = 0
-        for it in items:
-            c = lc(r["P"], it)
-            if c is None: miss += 1; c = med[it["i"]] * it["qty"]; mlist.append(it["name"].replace(' (לק"ג)', ""))
-            else: c = c[0]; have += c                  # מחיר מדויק – רק מה שיש בסניף (להצגה), כולל מבצעי כמות
-            tot += c                                   # להשוואה בין סניפים – חסר מוערך לפי האזור
-        r.update(mlist=mlist, have=have, sum=tot, fuel=cost(r["d"]), tot=tot + cost(r["d"]), miss=miss)
+    def stats():
+        for r in rows:
+            tot = 0; miss = 0; mlist = []; have = 0
+            for it in items:
+                c = lc(r["P"], it)
+                if c is None: miss += 1; c = med[it["i"]] * it["qty"]; mlist.append(it["name"].replace(' (לק"ג)', "")) if it["name"].replace(' (לק"ג)', "") not in mlist else None
+                else: c = c[0]; have += c              # מחיר מדויק – רק מה שיש בסניף (להצגה), כולל מבצעי כמות
+                tot += c                               # להשוואה בין סניפים – חסר מוערך לפי האזור
+            r.update(mlist=mlist, have=have, sum=tot, fuel=cost(r["d"]), tot=tot + cost(r["d"]), miss=miss)
+    ok_miss = lambda r: r["miss"] < MAX_MISSING and r["miss"] * 2 < len(items)   # עד 3 חסרים (ופחות מחצי הסל)
+    stats()
+    # אף סניף בטווח לא עומד בכלל (4+ חסרים בכולם) – המוצרים הנדירים יוצאים מההשוואה, וסניף עם 4+ חסרים אף פעם לא מוצג
+    rare = []
+    inr = [r for r in rows if r["min"] <= pr["maxMin"]] or rows[:1]
+    want, n0 = min(3, len(inr)), len(items)          # רוצים לפחות 3 סניפים להשוואה – אבל לא מוציאים יותר משליש מהסל בשביל זה
+    while len(items) > 1 and ((n_ok := sum(1 for r in inr if ok_miss(r))) == 0 or (n_ok < want and len(rare) < n0 // 3)):
+        it = max(items, key=lambda it: sum(1 for r in inr if lc(r["P"], it) is None))
+        items = [x for x in items if x["name"] != it["name"]]; rare.append(it["name"].replace(' (לק"ג)', "")); stats()   # כולל שורות כפולות של אותו מוצר
     nearest = rows[0]
     reg = next((r for r in rows if r["s"]["key"] == uk), None)
-    ok_miss = lambda r: r["miss"] < MAX_MISSING and r["miss"] * 2 < len(items)   # עד 3 חסרים (ופחות מחצי הסל)
     if reg and not ok_miss(reg): reg = None     # כנראה זיהוי סניף שגוי (או חנות שלא מוכרת את רוב הסל)
     pool = [r for r in rows if r["min"] <= pr["maxMin"] or r is reg] or [nearest]
     # סניף שחסרים בו הרבה מהמוצרים לא באמת עונה על הסל
@@ -592,6 +601,7 @@ def compute(u):
         elif avg and avg - best["tot"] >= 1:
             L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}*{inc}")
     L.append(f"{ride} {round(best['min'])} דק' {how} ממך")
+    if rare: L.append("🔎 _לא נמצאו בסופרים באזור שלך: " + ", ".join(dict.fromkeys(rare)) + "_")
     split_txt = None
     if split and best["tot"] - split["tot"] > split_min:
         A, B = split["A"]["s"], split["B"]["s"]
@@ -605,6 +615,7 @@ def compute(u):
         det.append(f"• {it['name']}{q} – " + (f"₪{c[0]:.2f}" + (f" 🔥 _מבצע {c[1]}_" if c[1] else "")
                                                + (f" _(אין בסניף – במקום: {c[2]})_" if c[2] else "") if c is not None
                                                else f"~₪{med[it['i']] * it['qty']:.2f} _(חסר בסניף)_"))
+    if rare: det.append("\n_לא מצאתי בסופרים באזור שלך (לא נכלל בהשוואה): " + ", ".join(dict.fromkeys(rare)) + "_")
     if gone: det.append("\n_לא נמצאו במאגר: " + ", ".join(gone) + "_")
     fresh = f"\n\n_מחירים ומבצעים מעודכנים ל-{D.built[8:10]}/{D.built[5:7]} {D.built[11:16]}_" if len(D.built) >= 16 else ""
     saved = 0 if stay else (gap if ref else (avg - best["tot"] if avg else 0))
