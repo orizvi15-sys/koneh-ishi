@@ -268,14 +268,15 @@ class Data:
         out = []
         for i, s in score.items():
             it = self.items[i]
-            if not it[0][0].isdigit() and len(q) <= 3: s += 1
+            if it[0][:1] in "PEM" and len(q) <= 3: s += 1     # ירקות/ביצים/בשר מאוחדים – "המוצר הבסיסי"; W (תפזורת) בלי בונוס
             f0, st, _, _ = self.meta(i)
             canon = False
             if f0 and f0 == q0:
                 s += 0.6   # "אורז בסמטי" לפני "קובה אורז"
                 # התאמה רק לפי גזירה ("חלבה"→"חלב") נחשבת "המוצר הבסיסי" רק למוצרים מאוחדים (ירקות/בשר במשקל)
-                canon = all(w in self.itoks[i] or (sw in st and not it[0][0].isdigit()) for w, sw in zip(q, qs))
-            sc = s / (len(q) + 0.3 * len(self.itoks[i])) + 0.35 * it[2] / self.max_avail
+                canon = all(w in self.itoks[i] or (sw in st and it[0][:1] in "PEM") for w, sw in zip(q, qs))
+            full = len(q) <= 2 and not nums and f0 == q0 and all(w in self.itoks[i] or sw in st for w, sw in zip(q, qs))
+            sc = s / (len(q) + 0.3 * len(self.itoks[i])) + (0.9 if full else 0.35) * it[2] / self.max_avail   # בקשה כללית קצרה שכל מילותיה במוצר → המוצר שנמכר בהכי הרבה סניפים
             if canon:   # בקשה כללית ("במבה") – המוצר הנפוץ ביותר מהסוג הזה
                 sc += 0.5 + 3.0 * it[2] / self.max_avail
             if sc > 0.4: out.append((sc, i))

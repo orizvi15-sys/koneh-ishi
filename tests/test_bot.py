@@ -168,6 +168,18 @@ def _():
     assert "צהובה" in got["גבינה צהובה 250 גר'"], got
     assert got["מלפפונים 1 ק'"].startswith("מלפפון ("), got
 
+@test("סריקת לילה 12/10: מוצרים כלליים מותאמים לסוג הנכון")
+def _():
+    want = {"פתיתים": ("פתיתים", "גבינה"), "חלב סויה": ("חלב", "חלבה"), "שקיות זבל": ("שקיות אשפה", None),
+            "בצל סגול": ("בצל אדום", None), "סלמון": ("פילה סלמון", "מעושן"), "ריבה": ("ריבה", "ריב "),
+            "פירה": ("פירה", "פירות"), "נייר כסף": ("נייר", "דימונד"), "גבינה בולגרית": ("גבינה בולגרית", None)}
+    found, missed = app.match_items([{"name": q, "qty": 1} for q in want])
+    assert not missed, missed
+    for f in found:
+        good, bad = want[f["src"]]
+        assert good in f["name"], (f["src"], f["name"])
+        if bad: assert bad not in f["name"], (f["src"], f["name"])
+
 @test("זיהוי בסיסי: 'בצל' → בצל יבש, 'ביצים M' → ביצים M")
 def _():
     assert app.basic_alias("בצל") == "P10"; assert app.basic_alias("ביצים M 12 יחידות") == "E02"
