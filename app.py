@@ -757,7 +757,8 @@ def send_reminder(to, u):
 
 # ---------- שומר לילה: התראה למנהל כשמשהו בנתונים נשבר ----------
 MAJOR = {"SHUFERSAL": "שופרסל", "RAMI_LEVY": "רמי לוי", "YOHANANOF": "יוחננוף", "OSHER_AD": "אושר עד",
-         "TIV_TAAM": "טיב טעם", "YAYNO_BITAN_AND_CARREFOUR": "קרפור", "VICTORY_NEW_SOURCE": "ויקטורי", "HAZI_HINAM": "חצי חינם"}
+         "TIV_TAAM": "טיב טעם", "YAYNO_BITAN_AND_CARREFOUR": "קרפור", "VICTORY_NEW_SOURCE": "ויקטורי", "HAZI_HINAM": "חצי חינם",
+         "MAHSANI_ASHUK_NEW_SOURCE": "מחסני השוק", "NETIV_HASED": "נתיב החסד", "HET_COHEN_NEW_SOURCE": "ח. כהן"}
 _watch = {"t": 0}
 
 # ---------- מונים לדוח השבועי ----------
