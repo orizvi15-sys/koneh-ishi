@@ -504,6 +504,27 @@ def _():
         for blk in [r["main"]] + r["others"].split("\n\n"):
             if "חסר בסניף" in blk: assert "שחסר" in blk, blk[:300]
 
+@test("'מה זיהיתי' מסודר לפי מחלקות בסופר (ירקות, חלב, ניקיון...) – סעיף 5, בקשה 12/10")
+def _():
+    D = kdata.D
+    want = {"עגבנייה (לק\"ג)": "produce", "חזה עוף (לק\"ג)": "meat", "ביצים L (12 יח')": "dairy",
+            "קוטג' תנובה 5% שומן 250 ג' בד\"צ": "dairy", "פסטה ספגטי מספר 8 אסם 500 גרם": "pantry", "במבה חטיף בוטנים אסם 200 גרם": "snacks",
+            "נוזל לניקוי כלים שקוף קלאסי 750 מ\"ל פלמוליב": "clean", "מלפפונים במלח 9-7 קבוצת יבנה 320 גרם": "pantry",
+            "עוגיות קרמוגית במילוי קרם שוקולד אסם 200 גרם": "snacks", "יוגורט ביו מצופה שוקולד 170 מ\"ל": "dairy",
+            "גלידה בן ג'ריס 500 גרם": "frozen", "קפה נמס עלית 200 גרם": "hot", "פיתות 10 יחידות אנג'ל": "bread",
+            "מזון חתול יבש עוף 2 קילו": "clean", "ג'אמפ טעם תפוחים 1.5 ליטר": "drinks", "סלמי תה מעושן (לק\"ג)": "meat"}
+    for n, d in want.items():
+        i = D.name2i.get(n); code = D.items[i][0] if i is not None else ("P01" if "עגבנייה" in n else "W:x" if "לק" in n else "729")
+        assert app.dept_of(code, n) == d, (n, app.dept_of(code, n), d)
+    to = "tg:3434"; setup_user(to, 32.0809, 34.7806)
+    send(to, "עגבניה, נוזל כלים, חלב, במבה, פסטה, חזה עוף, ביצים"); OUT.clear(); press(to, "seen")
+    t = texts()[-1]
+    assert "לפי מחלקות" in t, t
+    heads = [h for h in ("ירקות ופירות", "מוצרי חלב", "בשר, עוף", "מזווה", "חטיפים", "ניקיון") if h in t]
+    assert len(heads) >= 5 and [t.index(h) for h in heads] == sorted(t.index(h) for h in heads), t     # סדר הליכה בסופר
+    to2 = "tg:3435"; setup_user(to2, 32.0809, 34.7806); send(to2, "במבה, חלב"); OUT.clear(); press(to2, "seen")
+    assert "לפי מחלקות" not in texts()[-1]                                  # סל קטן – רשימה רגילה
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:
