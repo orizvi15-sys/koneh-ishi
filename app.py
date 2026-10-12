@@ -402,6 +402,28 @@ SEARCH_SYN = {"שקיות זבל": "שקיות אשפה", "נייר כסף": "נ
               "ניקוי רצפות": "נוזל לניקוי רצפות", "ציפס קפוא": "צ'יפס קפוא", "וניל": "סוכר וניל", "פרורי לחם": "פירורי לחם",
               "סבון ידיים": "סבון נוזלי לידיים", "מטהר אוויר": "מטהר אויר"}
 
+WFB_SKIP = ("מתובל", "המבורגר", "קציצ", "קבב", "שניצל", "נקניק", "שיפוד", "צמחי", "טבעוני", "מעושן", "ממולא", "מבושל", "מוכן")
+
+def weighed_fb(name):
+    """מוצר ארוז שהוא בעצם מוצר בסיסי במשקל ("בשר בקר טחון קפוא 500 נתח") → (קוד הפריט השקיל, ק"ג באריזה).
+    משמש כחלופה כשבסניף אין את המותג/האריזה: בשר טחון יש כמעט בכל סופר – במשקל."""
+    if any(w in name for w in WFB_SKIP): return None
+    t = [w for w in kdata.toks(re.sub(r"(\D)(\d)", r"\1 \2", name))]
+    best = None
+    for k, code in BASIC_ALIAS.items():
+        if code[:1] not in ("M",): continue
+        kt = kdata.toks(k)
+        if t[:len(kt)] == kt and (best is None or len(kt) > len(kdata.toks(best[0]))): best = (k, code)
+    if not best: return None
+    g = kdata.parse_size(name)
+    if g is None:
+        m = re.search(r"(\d+(?:\.\d+)?)\s*ק(?![א-ת])", name)
+        if m: g = float(m.group(1)) * 1000
+        else:
+            m = re.search(r"(?<!\d)(\d{3,4})(?!\d)", name)
+            g = float(m.group(1)) if m and 100 <= float(m.group(1)) <= 3000 else None
+    return (best[1], g / 1000) if g else None
+
 def basic_alias(name):
     n = re.sub(r'(\d+(\.\d+)?|ק"ג|קג|קילו|ק\'|גרם|גר\'?|יחידות|יח\'?|תבנית|ארוז(ה|ים)?|טרי(ים|יה|ה)?|רגיל(ה|ים)?|[–\-:,()])', " ", name)
     return BASIC_ALIAS.get(" ".join(n.split()))
@@ -543,6 +565,10 @@ def lc(P, it):
     """עלות השורה בסל בסניף (כמות × מחיר), כולל מבצעי כמות כשהכמות מספיקה.
     מחזיר (עלות, תיאור מבצע, שם החלופה או None) או None. אם אין בסניף את המוצר – מחפש חלופה שקולה (it["fb"])."""
     deals = getattr(P, "deals", {})
+    w = it.get("wfb")                                  # אחרון: אותו מוצר בסיסי במשקל (בשר טחון ארוז → בשר טחון לק"ג)
+    if w and w[0] in P and not any(g in P for g in it["g"]) and not any(g in P for g in it.get("fb") or []):
+        g, kg = w
+        return (P[g] * kg * it["qty"], None, f"{kdata.D.items[g][1].replace(' (לק\"ג)', '')} במשקל ({kg:g} ק\"ג)")
     for lst, sub in ((it["g"], False), (it.get("fb") or [], True)):
         best = None
         for g in lst:
@@ -574,7 +600,9 @@ def compute(u):
         else:
             mine = pr.get("brand") == "mine"
             g = [i] if mine else D.group(i, it.get("src") or it["name"])
-            items.append(dict(it, i=i, g=g, fb=[] if mine else D.fallback(i, it.get("src") or it["name"])))
+            wf = None if mine or not D.items[i][0][:1].isdigit() else weighed_fb(D.items[i][1])
+            if wf: wf = (D.code2i[wf[0]], wf[1]) if wf[0] in D.code2i else None
+            items.append(dict(it, i=i, g=g, fb=[] if mine else D.fallback(i, it.get("src") or it["name"]), wfb=wf))
     if not items:
         return ["לא מצאתי אף אחד מהמוצרים במאגר המחירים העדכני 🙁 נסה לכתוב אותם שוב."]
     near = sorted(((km(home, s["p"]), s) for s in D.stores), key=lambda x: x[0])

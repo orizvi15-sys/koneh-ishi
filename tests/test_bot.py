@@ -478,6 +478,19 @@ def _():
     found, missed = app.match_items([{"name": "פסטה", "qty": 1}, {"name": "חזה עוף", "qty": 1}])
     assert not missed, missed
 
+@test("בשר טחון ארוז (נתח 500 גרם) לא 'חסר בסניף' כשיש בשר טחון במשקל – באג 12/10 (יוחננוף בן צבי)")
+def _():
+    D = kdata.D
+    assert app.weighed_fb("בשר בקר טחון קפוא500 נתח") == ("M08", 0.5)
+    assert app.weighed_fb("טיבון ויל המבורגר בשר בקר טחון מתובל קפוא 400 גרם") is None     # המבורגר ≠ בשר טחון
+    s = next(s for s in D.stores if s["key"] == "7290803800003-32")
+    u = {"step": "done", "prefs": {"home": s["p"], "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "hist": [],
+         "items": [{"name": "בשר בקר טחון קפוא500 נתח", "code": "7296073747574", "qty": 1, "src": "בשר בקר טחון נתח"},
+                   {"name": "במבה חטיף בוטנים אסם 80 גרם", "code": D.items[D.search("במבה")[1]][0], "qty": 1}]}
+    r = app.compute(u)
+    blk = next(b for b in r["others"].split("\n\n") if "בן צבי" in b)
+    assert "בשר בקר טחון" not in blk, blk
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:
