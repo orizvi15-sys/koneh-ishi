@@ -170,7 +170,7 @@ def _():
 
 @test("סריקת לילה 12/10: מוצרים כלליים מותאמים לסוג הנכון")
 def _():
-    want = {"פתיתים": ("פתיתים", "גבינה"), "חלב סויה": ("חלב", "חלבה"), "שקיות זבל": ("שקיות אשפה", None),
+    want = {"פתיתים": ("פתיתים", "גבינה"), "חלב סויה": ("משקה סויה", "חלבה"),   # בחנויות: "משקה סויה" (12/10) "שקיות זבל": ("שקיות אשפה", None),
             "בצל סגול": ("בצל אדום", None), "סלמון": ("פילה סלמון", "מעושן"), "ריבה": ("ריבה", "ריב "),
             "פירה": ("פירה", "פירות"), "נייר כסף": ("נייר", "דימונד"), "גבינה בולגרית": ("גבינה בולגרית", None)}
     found, missed = app.match_items([{"name": q, "qty": 1} for q in want])
@@ -575,6 +575,57 @@ def _():
                        ("חזה הודו טרי", None), ("חזה בקר", None), ("חזה עוף קפוא כש", None)):
         got = [n for n, r in R if r.search(name)]
         assert got == ([want] if want else []), (name, got)
+
+@test("חיפוש באגים 12/10 (סבב 2): ביצים בכל תבנית 12, חלב סויה, שניצל, מיקום מחוץ לישראל, אזור רחוק, הסופר הקרוב עם סל מלא")
+def _():
+    D = kdata.D
+    # ביצים: "ביצים תבנית מידה M ביצי הכפר 12 יח'" / "ביצי חופש 12" הם חלופה ל"ביצים L (12)"
+    fb = {D.items[j][1] for j in D.fallback(D.code2i["E01"])}
+    assert any("ביצי הכפר" in n or "ביצי חופש" in n for n in fb) and not any("הפתעה" in n or "קינדר" in n for n in fb), sorted(fb)[:8]
+    f, m = app.match_items([{"name": n, "qty": 1} for n in ("חלב סויה", "חלב שקדים", "שניצל", "צלי כתף", "חלות", "נייר אלומיניום")])
+    got = {x["src"]: x["name"] for x in f}
+    assert not m, m
+    assert got["חלב סויה"].startswith("משקה סויה") and got["חלב שקדים"].startswith("משקה שקדים"), got
+    assert got["שניצל"].startswith("שניצל עוף") and "תירס" not in got["שניצל"], got["שניצל"]
+    assert got["צלי כתף"] == 'בשר בקר לבישול (לק"ג)' and got["חלות"].startswith("חלה"), got
+    # מיקום מחוץ לישראל (או 0,0) – לא נשמר, מבקשים שוב
+    to = "tg:3535"; setup_user(to, 32.0809, 34.7806)
+    for la, lo in ((0.0, 0.0), (34.9, 33.6), (31.95, 35.93)):
+        OUT.clear(); loc(to, la, lo)
+        assert "מחוץ לישראל" in last(), last()
+        assert app.km(app.USERS[to]["prefs"]["home"], [32.0809, 34.7806]) < 1
+    assert app.place_name([29.893, 35.06]) == "המיקום ששלחת"              # יטבתה – לא "אזור אילת"
+    assert app.place_name([32.0809, 34.7806]).startswith("אזור ")
+    # בלי סופר קבוע: הסניף הקרוב חסר מוצרים (AM:PM) → ההשוואה מול סניף מלא שקרוב כמעט באותה מידה
+    names = ["חלב", "לחם אחיד", "ביצים", "קוטג'", "פסטה", "אורז", "שמן", "עגבניה", "מלפפון", "בננה", "חזה עוף", "במבה", "נייר טואלט"]
+    f, m = app.match_items([{"name": n, "qty": 1} for n in names])
+    for home in ((32.7600, 34.9710), (31.8140, 34.7790)):                   # טירת כרמל, גדרה (12/10: AM:PM / אקספרס בלי חזה עוף)
+        r = app.compute({"step": "done", "prefs": {"home": list(home), "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "hist": [], "items": [dict(x) for x in f]})
+        if "הסופר הקרוב אליך משתלם" in r["main"]:
+            assert "חסר בסניף" not in r["main"], r["main"]
+
+@test("קבלה: 'שופרסל דיל קריית אתא' → סניף דיל (לא BE), 'חלות' בסניף בלי המותג → חלה אחרת, שם אזור לפי הסניף הצמוד – באגים 12/10")
+def _():
+    D = kdata.D; ata = (32.8090, 35.1070)
+    name = lambda k: next((s["n"] for s in D.stores if s["key"] == k), "")
+    assert "דיל" in name(app.match_store("שופרסל דיל – קריית אתא", ata)), name(app.match_store("שופרסל דיל – קריית אתא", ata))
+    assert "BE" not in name(app.match_store("שופרסל – קריית אתא", ata))
+    assert "BE" in name(app.match_store("שופרסל BE קריית אתא", ata))
+    assert "שלי" in name(app.match_store("שופרסל שלי קריית אתא איינשטיין", ata))
+    st = next(s for s in D.stores if s["chain"] == "אושר עד" and "אונו" in s["n"])
+    f, m = app.match_items([{"name": "חלות", "qty": 2}])
+    u = {"step": "done", "prefs": {"home": st["p"], "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "hist": [], "items": f}
+    r = app.compute(u)
+    blk = next(b for b in r["others"].split("\n\n") if "אונו" in b)
+    assert "חסר בסניף" not in blk, blk
+    for town, p in (("ירוחם", (30.987, 34.929)), ("שלומי", (33.075, 35.145))):
+        assert app.place_name(p) == f"אזור {town}", (town, app.place_name(p))
+
+@test("קבלה: 0.5 ק\"ג שהותאם למוצר ארוז של 500 גרם = אריזה אחת (לא חצי) – באג 12/10")
+def _():
+    f, m = app.match_items([{"name": "הודו טחון", "qty": 0.5}, {"name": "עגבניה", "qty": 1.35}, {"name": "במבה", "qty": 3}])
+    q = {x["src"]: x["qty"] for x in f}
+    assert q["הודו טחון"] == 1 and q["עגבניה"] == 1.35 and q["במבה"] == 3, q
 
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])

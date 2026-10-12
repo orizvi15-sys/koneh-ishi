@@ -354,20 +354,27 @@ _img_locks = {}
 
 
 # ---------- הסופר הקבוע ----------
+STORE_FORMATS = {"דיל", "שלי", "יש", "אקספרס", "BE", "be", "גוד", "יוניברס", "סיטי", "היפר", "מרקט", "אקסטרה", "בכיף", "AM", "PM"}
+
 def match_store(text, home):
     """מזהה את הסניף מתוך הכיתוב בקבלה (רשת + סניף/כתובת), מבין הסניפים באזור"""
     D = kdata.D
     if not text or not home: return None
-    q = {kdata.stem(w) for w in kdata.toks(text)}
+    norm = lambda t: re.sub(r"קריית", "קרית", t)                          # "קריית אתא" בקבלה = "קרית אתא" בנתונים
+    q = {kdata.stem(w) for w in kdata.toks(norm(text))}
+    fmt_q = {f for f in STORE_FORMATS if f in q}
     best = None
     for s in D.stores:
         d = km(home, s["p"])
         if d > REG_MAX_KM: continue                          # סניף רחוק מהבית – לא נרשם כסופר הקבוע
         ch = {kdata.stem(w) for w in kdata.toks(s["chain"])}
         if not ch or not ch <= q: continue                   # הרשת חייבת להופיע בקבלה
-        nm = {kdata.stem(w) for w in kdata.toks(s["n"])} - ch
-        rest = nm | {kdata.stem(w) for w in kdata.toks(s["a"])} - ch
+        nm = {kdata.stem(w) for w in kdata.toks(norm(s["n"]))} - ch
+        rest = nm | {kdata.stem(w) for w in kdata.toks(norm(s["a"]))} - ch
         sc = len(rest & q) - 0.5 * len(nm - q)                 # מילה בשם הסניף שלא מופיעה בקבלה (למשל BE) – פחות סביר
+        fmt_s = {f for f in STORE_FORMATS if f in nm}
+        if fmt_q and fmt_s: sc += 1.5 if fmt_q & fmt_s else -1.5   # "שופרסל דיל" בקבלה → סניף דיל, לא BE/אקספרס
+        elif fmt_s & {"BE", "be"} and not fmt_q: sc -= 1           # בית מרקחת – רק אם כתוב בקבלה
         key = (sc, -d)
         if best is None or key > best[0]: best = (key, s)
     return best[1]["key"] if best else None
@@ -398,9 +405,15 @@ BASIC_ALIAS = {"בצל": "P10", "בצלים": "P10", "בצל יבש": "P10", "ת
                "כנפיים": "M06", "כנפיים עוף": "M06", "עוף שלם": "M07", "בשר טחון": "M08", "בשר בקר טחון": "M08", "אנטריקוט": "M10",
                "סלמון": "M11", "פילה סלמון": "M11", "אמנון": "M12", "מושט": "M12", "דניס": "M13", "לברק": "M14",
                "תפוא": "P12", "תפו\"א": "P12", "תפוא לבן": "P12", "תפו\"א לבן": "P12", "תפוח אדמה לבן": "P12", "תפוחי אדמה לבנים": "P12",
-               "תפוא אדום": "P13", "תפו\"א אדום": "P13", "חזה עוף טרי": "M01", "עוף שלם טרי": "M07"}
+               "תפוא אדום": "P13", "תפו\"א אדום": "P13", "חזה עוף טרי": "M01", "עוף שלם טרי": "M07",
+               "צלי כתף": "M09", "כתף בקר": "M09", "בשר לגולאש": "M09", "גולאש": "M09", "בשר בקר לבישול": "M09", "בשר לבישול": "M09",
+               "בשר לצלי": "M09", "שניצל עוף": "M02", "שניצל טרי": "M02", "בורי": "M15", "קרפיון": "M16", "בקלה": "M17", "פילה בקלה": "M17",
+               "הייק": "M17", "פילה הייק": "M17", "פילה אמנון": "M12", "שניצל": "M02", "שניצלים": "M02"}
+# גבינות (בולגרית/צפתית/פטה) – בכוונה בלי כינוי לפריט במשקל: רוב הקונים מתכוונים לגביע של 250 גרם, לא לק"ג מהדלפק
 # שם אחר שבו המוצר מופיע ברשתות ("שקיות זבל" = "שקיות אשפה")
-SEARCH_SYN = {"שקיות זבל": "שקיות אשפה", "נייר כסף": "נייר אלומיניום", "ירקות קפואים": "ירקות מוקפאים", "תותים": "תות שדה",
+SEARCH_SYN = {"שקיות זבל": "שקיות אשפה", "נייר אלומיניום": "נייר כסף", "חלב סויה": "משקה סויה", "חלב שקדים": "משקה שקדים",
+              "חלב שיבולת שועל": "משקה שיבולת שועל", "חלב אורז": "משקה אורז", "חלות": "חלה", "מלפפון חמוץ": "מלפפונים במלח",
+              "מלפפונים חמוצים": "מלפפונים במלח", "חמוצים": "מלפפונים במלח", "ירקות קפואים": "ירקות מוקפאים", "תותים": "תות שדה",
               "ניקוי רצפות": "נוזל לניקוי רצפות", "ציפס קפוא": "צ'יפס קפוא", "וניל": "סוכר וניל", "פרורי לחם": "פירורי לחם",
               "סבון ידיים": "סבון נוזלי לידיים", "מטהר אוויר": "מטהר אויר"}
 
@@ -473,7 +486,13 @@ def match_items(items):
                 except Exception: pass
     for i, it in enumerate(items):                     # שם כללי ("פסטה") – מוצר בסיסי לא יוצא "לא מצאתי" גם אם Claude לא בחר
         if picks[i] is None and cand[i]: picks[i] = generic_pick(it["name"], cand[i])
-    found = [dict(item_of(d, picks[i], it["qty"], it["name"]), c=[d.items[k][0] for k in cand[i] if k != picks[i]][:4])
+    def pack_qty(k, q):
+        """משקל בק"ג מקבלה (0.5) שהותאם למוצר ארוז (500 גרם) → מספר אריזות (1), ולא חצי אריזה"""
+        if q is None or abs(q - round(q)) < 0.01 or not d.items[k][0][:1].isdigit(): return q
+        g = kdata.parse_size(d.items[k][1])
+        if not g or g < 100 or re.search(r'מ"?ל|ליטר', d.items[k][1]): return q
+        return max(1, round(q * 1000 / g))
+    found = [dict(item_of(d, picks[i], pack_qty(picks[i], it["qty"]), it["name"]), c=[d.items[k][0] for k in cand[i] if k != picks[i]][:4])
              for i, it in enumerate(items) if picks[i] is not None]
     missed = [it["name"] for i, it in enumerate(items) if picks[i] is None]
     return found, missed
@@ -614,10 +633,11 @@ def compute(u):
         if i is None: gone.append(it["name"])
         else:
             mine = pr.get("brand") == "mine"
-            g = [i] if mine else D.group(i, it.get("src") or it["name"])
+            q = it.get("src") or it["name"]; q = SEARCH_SYN.get(" ".join(kdata.toks(q)), q)   # "חלות" → קבוצה וחלופות של "חלה"
+            g = [i] if mine else D.group(i, q)
             wf = None if mine or not D.items[i][0][:1].isdigit() else weighed_fb(D.items[i][1])
             if wf: wf = (D.code2i[wf[0]], wf[1]) if wf[0] in D.code2i else None
-            items.append(dict(it, i=i, g=g, fb=[] if mine else D.fallback(i, it.get("src") or it["name"]), wfb=wf))
+            items.append(dict(it, i=i, g=g, fb=[] if mine else D.fallback(i, q), wfb=wf))
     if not items:
         return ["לא מצאתי אף אחד מהמוצרים במאגר המחירים העדכני 🙁 נסה לכתוב אותם שוב."]
     near = sorted(((km(home, s["p"]), s) for s in D.stores), key=lambda x: x[0])
@@ -688,6 +708,9 @@ def compute(u):
     stay_min = STAY_MIN_WEIGHED if weighed else STAY_MIN
     # בלי סופר קבוע ידוע – משווים לסופר הקרוב (שיש בו את הסל): חיסכון קטן לא שווה נסיעה רחוקה
     near_ref = None if reg else min((r for r in pool if ok_miss(r)), key=lambda r: r["d"], default=None)
+    if near_ref and near_ref["miss"]:               # הקרוב חסר מוצרים (AM:PM, אקספרס) – עדיף סניף מלא שקרוב כמעט באותה מידה
+        full_near = min((r for r in pool if r["miss"] == 0 and r["min"] <= near_ref["min"] + 7), key=lambda r: r["d"], default=None)
+        if full_near: near_ref = full_near
     ref = reg or near_ref
     stay = ref is not None and ref["tot"] - best["tot"] < stay_min
     gap = ref["tot"] - best["tot"] if ref else 0
@@ -1602,13 +1625,24 @@ def fix_command(text):
         if len(cn) >= 8 and len(tn) == len(cn) and sum(a != b for a, b in zip(tn, cn)) <= 2: return c
     return text
 
+def in_israel(la, lo):
+    """בערך: גבולות ישראל (כולל גולן ויו"ש). מזרח: גולן עד 35.95, משם הירדן/ים המלח ~35.6, ערבה עד אילת. דרום-מערב: גבול מצרים"""
+    if not (29.45 <= la <= 33.45 and 34.2 <= lo <= 35.95): return False
+    east = 35.95 if la >= 32.7 else 35.6 if la >= 31.0 else 35.45 - (31.0 - la) * 0.27
+    west = 34.2 if la >= 31.28 else 34.25 + (31.28 - la) * 0.36
+    return west <= lo <= east
+
 def place_name(home):
     """שם המקום לפי הסניפים הקרובים ("נתיבות")"""
     D = kdata.D
     if not D or not home: return "המיקום ששמרתי"
     near = sorted(D.stores, key=lambda s: km(home, s["p"]))[:5]
-    cities = [(s["a"].split(",")[-1].strip()) for s in near if "," in s["a"]]
-    c = max(set(cities), key=cities.count) if cities else ""
+    if km(home, near[0]["p"]) > 40: return "המיקום ששלחת"           # רחוק מכל הסניפים (ערבה, חו"ל) – לא "אזור אילת"
+    city = lambda s: s["a"].split(",")[-1].strip() if "," in s["a"] else ""
+    cities = [city(s) for s in near if city(s) and km(home, s["p"]) <= km(home, near[0]["p"]) + 6]   # רק סניפים באותו אזור
+    close = [city(s) for s in near if city(s) and km(home, s["p"]) <= 4]
+    if close: cities = close                       # יש סניף ממש ליד – העיר שלו (ירוחם, שלומי – לא "אזור דימונה/נהריה")
+    c = max(set(cities), key=lambda x: (cities.count(x), -cities.index(x))) if cities else ""
     return f"אזור {c}" if c else "המיקום ששמרתי"
 
 SETTINGS = [("set:loc", "📍 עדכון מיקום"), ("set:club", "💳 מועדוני לקוחות"), ("set:store", "⭐ הסופר הקבוע שלי"),
@@ -1804,7 +1838,10 @@ def handle(msg):
         return ask(to, "loc", u)
 
     if t == "location":
-        pr["home"] = [msg["location"]["latitude"], msg["location"]["longitude"]]; fill_prefs(pr)
+        la, lo = msg["location"]["latitude"], msg["location"]["longitude"]
+        if not in_israel(la, lo):                                    # מחוץ לישראל (או 0,0 של GPS שלא נתפס) – לא שומרים
+            return send_location_request(to, "🤔 המיקום שקיבלתי נראה מחוץ לישראל. שלחו שוב את המיקום (📎 ← מיקום) מהמקום שממנו יוצאים לקניות 📍")
+        pr["home"] = [la, lo]; fill_prefs(pr)
         if u["step"] == "loc":           # בלי שאלת "איך מגיעים": ברכב, כל הסניפים הקרובים (עלות הדלק בחישוב)
             pr.setdefault("mode", "car"); pr.setdefault("maxMin", 999); pr.setdefault("brand", "cheap")
             return ask(to, "clubq", u)
