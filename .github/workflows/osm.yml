@@ -1,0 +1,29 @@
+# כל הסופרמרקטים בישראל מ-OpenStreetMap (חינם, בלי מפתח) – לדיוק מיקום סניפים שהכתובת שלהם לא ברורה.
+# רץ פעם בשבוע; הבנייה (daily-data) משתמשת ב-osm.json שבמהדורה.
+name: osm
+on:
+  schedule:
+    - cron: "17 2 * * 0"
+  workflow_dispatch:
+  push:
+    paths: [".github/workflows/osm.yml", ".github/run-osm"]
+permissions:
+  contents: write
+jobs:
+  osm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Download supermarkets from OpenStreetMap (Overpass)
+        run: |
+          Q='[out:json][timeout:300];(nwr["shop"~"^(supermarket|convenience|wholesale|greengrocer|department_store)$"](29.4,34.2,33.4,35.95););out center tags;'
+          for url in https://overpass-api.de/api/interpreter https://overpass.kumi.systems/api/interpreter https://maps.mail.ru/osm/tools/overpass/api/interpreter; do
+            curl -sS --max-time 400 --data-urlencode "data=$Q" "$url" -o raw.json && jq -e '.elements | length > 500' raw.json >/dev/null && break
+            echo "failed: $url"; sleep 20
+          done
+          jq -c '[.elements[] | {lat, lon, center, tags: (.tags | with_entries(select(.key|test("^(name|name:he|name:en|brand|brand:he|brand:en|operator|shop|addr:street|addr:city|addr:place|addr:housenumber)$"))))}]' raw.json > osm.json
+          echo "supermarkets: $(jq length osm.json)"
+      - name: Publish
+        run: gh release upload data-latest osm.json --clobber -R "$GITHUB_REPOSITORY"

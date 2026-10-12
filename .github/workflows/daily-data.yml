@@ -82,11 +82,12 @@ jobs:
           gh release download "$REL" -p 'status-*.json' -D in -R "$GITHUB_REPOSITORY" || true
           gh release download "$REL" -p geocache.json -D . -R "$GITHUB_REPOSITORY" || true
           gh release download "$REL" -p cities.json -D . -R "$GITHUB_REPOSITORY" || true
+          gh release download "$REL" -p osm.json -D . -R "$GITHUB_REPOSITORY" || true
           ls -la in
       - name: Build nationwide dataset
         env:
           GOOGLE_MAPS_KEY: ${{ secrets.GOOGLE_MAPS_KEY }}   # לא חובה – בלעדיו משתמשים רק ב-OpenStreetMap
-        run: python tools/build_data.py in koneh-data.bin --geocache geocache.json --cities cities.json --max-geocode 3500 --summary summary.md
+        run: python tools/build_data.py in koneh-data.bin --geocache geocache.json --cities cities.json --max-geocode 3500 --summary summary.md --osm osm.json
       - name: Publish
         if: always()
         run: |

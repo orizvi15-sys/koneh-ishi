@@ -171,11 +171,48 @@ def clean_name(n):
     return re.sub(r"\s+", " ", re.sub(r"^[\s*.\-]+|[\s*.\-]+$", "", n or "")).strip()
 
 
+# ---------- OpenStreetMap: מיקום סניף לפי הסופר במפה הפתוחה ----------
+OSM_CHAIN = {"שופרסל": r"שופרסל|shufersal", "רמי לוי": r"רמי לוי|rami ?levy", "יוחננוף": r"יוחננוף|yoh?ananof|yochananof",
+             "ויקטורי": r"ויקטורי|victory", "אושר עד": r"אושר עד|osher ?ad", "קרפור": r"קרפור|carrefour|יינות ביתן|yeinot ?bitan|מגה בעיר",
+             "טיב טעם": r"טיב טעם|tiv ?taam", "יילו": r"יילו|yellow", "דור אלון": r"דור אלון|אלונית|alonit|am:?pm|dor ?alon",
+             "מחסני השוק": r"מחסני השוק|mahsane", "חצי חינם": r"חצי חינם|hatzi ?hinam|hazi ?hinam", "סופר ספיר": r"ספיר|sapir",
+             "נתיב החסד": r"נתיב החסד|netiv", "קשת טעמים": r"קשת טעמים|keshet", "פרש מרקט": r"פרש מרקט|fresh ?market|סופר דוש",
+             "קינג סטור": r"קינג סטור|king ?store", "זול ובגדול": r"זול ובגדול|zol", "סופר יודה": r"סופר יודה|yuda",
+             "שוק העיר": r"שוק העיר", "שפע ברכת השם": r"שפע ברכת|ברכת השם", "ברקת": r"ברקת|bareket", "סיטי מרקט": r"סיטי מרקט|city ?market",
+             "סטופ מרקט": r"סטופ מרקט|stop ?market", "פוליצר": r"פוליצר|polizer", "סאלח דבאח": r"דבאח|dabach", "ח. כהן": r"ח\.? ?כהן"}
+OSM_STOP = {"סניף", "סופר", "מרקט", "the", "ת", "בע\"מ", "ברחוב", "רחוב", "שד", "מרכז"}
+
+def osm_locate(stores, osm):
+    """לסניפים במיקום משוער (עיר/שם): מוצאים את הסופר של אותה רשת במפה הפתוחה, באותו אזור, עם הכי הרבה מילים משותפות בשם/כתובת"""
+    words = lambda t: {w for w in re.findall(r"[\w\"']+", (t or "").lower()) if len(w) > 1 and w not in OSM_STOP}
+    pois = []
+    for e in osm:
+        tg = e.get("tags") or {}; lat = e.get("lat") or (e.get("center") or {}).get("lat"); lon = e.get("lon") or (e.get("center") or {}).get("lon")
+        if lat is None: continue
+        txt = " ".join(str(tg.get(k, "")) for k in ("name", "name:he", "name:en", "brand", "brand:he", "brand:en", "operator"))
+        loc = " ".join(str(tg.get(k, "")) for k in ("addr:street", "addr:city", "addr:place", "name", "name:he"))
+        pois.append(([lat, lon], txt.lower(), words(loc) | words(txt)))
+    used = set(); fixed = 0
+    for k, s in stores.items():
+        if s.get("prec") not in ("city", "name") or not s.get("p"): continue
+        rx = OSM_CHAIN.get(s.get("chain"))
+        if not rx: continue
+        cand = [(j, p) for j, p in enumerate(pois) if j not in used and re.search(rx, p[1]) and dist_km(p[0], s["p"]) < 15]
+        if not cand: continue
+        mine = words(s.get("name", "").replace(s.get("chain", ""), "")) | words(s.get("addr", "")) | words(s.get("city", ""))
+        mine -= words(s.get("chain", ""))
+        scored = sorted(((len(mine & p[2]), -dist_km(p[0], s["p"]), j, p) for j, p in cand), reverse=True)
+        best = scored[0]
+        if best[0] == 0 and len(cand) > 1: continue           # כמה סניפים של הרשת באזור ואין רמז איזה – לא מנחשים
+        used.add(best[2]); s["p"], s["prec"] = best[3][0], "osm"; fixed += 1
+    return fixed
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("indir"); ap.add_argument("out")
     ap.add_argument("--geocache", default="geocache.json"); ap.add_argument("--cities", default="cities.json")
     ap.add_argument("--max-geocode", type=int, default=3000); ap.add_argument("--summary", default="")
+    ap.add_argument("--osm", default="")
     a = ap.parse_args()
 
     cities = load_json(a.cities, {})
@@ -307,7 +344,7 @@ def main():
         print("google results moved to city center:", gbad)
         # ---- Google Places: סניפים שעדיין לא מדויקים – חיפוש לפי שם העסק ("רמי לוי אופקים") ----
         pdone = geo.setdefault("_places", {}); pused = 0
-        for k, s in stores.items():
+        for k, s in (stores.items() if os.environ.get("ENABLE_PLACES") == "1" else []):   # כבוי – לא רוצים חיוב
             if s.get("prec") in ("address", "manual", "google", "places") and s.get("p") or pused >= 400: continue
             c = s["city"]; ck = f"{s['chain']}|{s['name']}|{s['addr']}|{c}"
             if ck in pdone: continue
@@ -318,6 +355,11 @@ def main():
             if p and (not s.get("p") or dist_km(p, s["p"]) < 25):        # רק אם זה באותו אזור (לא סניף אחר באותו שם בעיר אחרת)
                 s["p"], s["prec"] = p, "places"; geo[ck] = [p, "places"]
         print("google places queries:", pused)
+    # ---- OpenStreetMap (חינם): סניפים שמיקומם רק לפי עיר/שם – מחפשים את הסופר במפה הפתוחה לפי רשת + שם + אזור ----
+    osm = load_json(a.osm, []) if a.osm else []
+    if osm:
+        fixed = osm_locate(stores, osm)
+        print("openstreetmap: stores located:", fixed, "of", sum(1 for s in stores.values() if s.get("prec") in ("city", "name")) + fixed)
     json.dump(geo, open(a.geocache, "w", encoding="utf-8"), ensure_ascii=False)
     located = {k: s for k, s in stores.items() if s.get("p")}
     print("located", len(located), "of", len(stores), "geocode queries used", a.max_geocode - q_left)
