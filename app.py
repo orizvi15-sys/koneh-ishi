@@ -1410,6 +1410,8 @@ def settings_action(to, u, reply):
         return send_text(to, savings_text(u) or "עוד לא בדקת קניות החודש 🙂")
     if reply == "set:faq":
         return send_buttons(to, "💬 *שאלות ותשובות* – על מה תרצה לשאול?", [(f"set:faq{j}", q[:40]) for j, (q, _) in enumerate(faq_answer(None))])
+    if reply.startswith("set:faq") and not (reply[7:].isdigit() and int(reply[7:]) < len(faq_answer(None))):
+        reply = "set:faq"; return settings_action(to, u, reply)
     if reply.startswith("set:faq"):
         q, a = faq_answer(int(reply[7:]))
         return send_buttons(to, f"*{q}*\n\n{a}", [("set:faq", "↩️ עוד שאלות")])
@@ -1427,6 +1429,9 @@ def fill_prefs(pr):
     """ברירות מחדל להעדפות (ההרשמה הקצרה שואלת רק מיקום ומועדון) – כדי שאף פעם לא יחסר "mode" וכו'"""
     if pr.get("home"):
         pr.setdefault("mode", "car"); pr.setdefault("maxMin", 999); pr.setdefault("brand", "cheap"); pr.setdefault("splitMin", SPLIT_MIN)
+        if pr["mode"] not in ("car", "walk", "bus"): pr["mode"] = "car"            # ערכים פגומים/ישנים בזיכרון → ברירת מחדל
+        if not isinstance(pr["maxMin"], (int, float)): pr["maxMin"] = 999
+        if not isinstance(pr["splitMin"], (int, float)): pr["splitMin"] = SPLIT_MIN
     return pr
 
 def handle(msg):

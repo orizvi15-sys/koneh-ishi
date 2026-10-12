@@ -300,6 +300,28 @@ def _():
     long = [len(t) for t in texts() if len(t) > 4096]
     assert not long, long
 
+@test("הפצצה בקלט מוזר: טקסטים וכפתורים לא צפויים, במצבי משתמש שונים ופגומים – בלי קריסה")
+def _():
+    import copy
+    texts_ = ["", " ", "😀😀😀", "hello", "milk, bread", "123", "0", "-5 חלב", "חלב x0", "חלב ×1000", "א" * 5000, "חלב\n" * 300,
+              "<b>חלב</b>", "*_~`", "/start", "/unknown", "\u200f\u200e", "קילו", "חצי", "300 גרם", "תוסיף", "תוריד", "כמה עולה",
+              "בשר, עוף, דג, גבינה", "ביצים 0 יחידות", "חלב 3% – ", " – 2"]
+    btns = ["", "v:9", "v:x", "fix:99", "alt:0:9", "del:5", "set:faq99", "set:faqx", "club:לא קיים", "st:nokey", "hh99",
+            "loc_ok", "reset_yes", "seen", "oth", "spl", "det", "addf", "noadd", "mine", "weekly", "cam", "list", "x" * 300]
+    states = [{"step": "new", "prefs": {}, "hist": []}, {"step": "done", "prefs": {"home": [32.08, 34.78]}, "hist": []},
+              {"step": "loc", "prefs": {}, "hist": []},
+              {"step": "zzz", "prefs": {"home": [32.08, 34.78], "mode": "bike", "maxMin": "x"}, "hist": [{"d": 0, "items": [{"code": "nope", "name": "?", "qty": 1}]}]}]
+    to = "tg:3999"
+    for st in states:
+        for x in texts_:
+            app.USERS[to] = copy.deepcopy(st); OUT.clear(); send(to, x)
+            assert not any("משהו השתבש" in o.get("text", "") for o in OUT), ("טקסט", x[:30], st["step"])
+            assert not any(len(o.get("text", "")) > 4096 for o in OUT), ("ארוך מדי", x[:30])
+        for b in btns:
+            app.USERS[to] = copy.deepcopy(st); OUT.clear(); press(to, b)
+            assert not any("משהו השתבש" in o.get("text", "") for o in OUT), ("כפתור", b[:30], st["step"])
+    OUT.clear()
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:
