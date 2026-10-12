@@ -125,13 +125,13 @@ def _():
     send(to, "היי"); assert "loc_ok" in buttons(), buttons()
     press(to, "loc_ok"); assert "קונים" in last()
     press(to, "weekly"); press(to, "hh34")
-    assert any("הסופר המנצח" in t for t in texts()), texts()[-2:]
+    assert any("מחיר הסל" in t for t in texts()), texts()[-2:]
 
 @test("רשימה בשורה אחת → המלצה על סופר")
 def _():
     to = "tg:3003"; setup_user(to)
     send(to, "חלב, לחם, במבה, קוטג'")
-    assert any("הסופר המנצח" in t for t in texts()), texts()
+    assert any("מחיר הסל" in t for t in texts()), texts()
 
 @test("רשימה ארוכה: '32 גלילים' / '12 יחידות' = חבילה אחת (באג 11/10)")
 def _():
@@ -201,7 +201,7 @@ def _():
 @test("טקסט חופשי: 'קילו חזה עוף', 'כמה עולה במבה?', תוסיף/תוריד, תודה")
 def _():
     to = "tg:3007"; setup_user(to)
-    send(to, "קילו חזה עוף"); assert any("הסופר המנצח" in t for t in texts())
+    send(to, "קילו חזה עוף"); assert any("מחיר הסל" in t for t in texts())
     send(to, "כמה עולה במבה?"); assert "₪" in last(), last()
     send(to, "תוסיף חלב"); assert any(x["name"].startswith("חלב") or "חלב" in x["name"] for x in app.USERS[to]["items"])
     send(to, "תוריד חלב"); assert not any("חלב" in x["name"] for x in app.USERS[to]["items"])
@@ -211,7 +211,7 @@ def _():
 def _():
     to = "tg:3008"; setup_user(to)
     send(to, "בשר, חלב"); assert "איזה בשר" in last(), last()
-    press(to, "v:0"); assert any("הסופר המנצח" in t for t in texts())
+    press(to, "v:0"); assert any("מחיר הסל" in t for t in texts())
 
 @test("קבלה מצולמת → המלצה, 'מה זיהיתי', 'סופרים אחרים', תיקון")
 def _():
@@ -367,6 +367,15 @@ def _():
     assert app.wk()["acc_bad"][0][1].startswith(found[1]["name"][:10])
     assert "דיוק מול קבלות" in app.weekly_report()
     app.USERS["_meta"].pop("wk", None)
+
+@test("בלי סופר קבוע: חיסכון קטן מ-₪35 → ממליץ על הסופר הקרוב ('הסופר הקרוב אליך משתלם') – בקשה 12/10")
+def _():
+    to = "tg:3030"; setup_user(to, 31.911968, 34.788889)       # נס ציונה
+    send(to, "במבה, חלב")
+    main = next(t for t in texts() if "מחיר הסל" in t)
+    assert "הסופר הקרוב אליך משתלם" in main or "חוסך" in main, main
+    if "חוסך" in main:
+        n = int(re.search(r"חוסך <b>₪(\d+)", main).group(1)); assert n >= 35, main
 
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])

@@ -15,8 +15,11 @@ IL = timezone(timedelta(hours=3))
 UA = {"User-Agent": "koneh-ishi-price-bot/1.0 (+https://github.com/orizvi15-sys/koneh-ishi)"}
 MAX_ITEMS = 65000
 # מיקומים שאומתו ידנית
+ONLINE = re.compile(r"אינטרנט|אונליין|online|וולט", re.I)
 OVERRIDES = {
     "7290058140886-64": [32.5072, 34.9186],    # רמי לוי אור עקיבא – בקובץ רשום "חיפה"
+    "7290785400000-17": [31.8667, 34.8040],    # קשת טעמים בילו (מרכז נטו גבעת ברנר) – מוקם לפי השם ליד נס ציונה
+    "7290661400001-207": [31.8606, 35.1676],   # מחסני השוק 207 גבעת זאב – מוקם במרכז ירושלים
     "7290027600007-657": [33.2085, 35.5695],   # שופרסל Be קריית שמונה (קניון שמונה סנטר) – גוגל מיקם בת"א
     "7290696200003-95": [31.6683, 34.5717],    # ויקטורי אשקלון מרכז (בן גוריון 1) – גוגל מיקם ברמת גן
     "7290661400001-71": [31.7300, 34.7450],    # מחסני השוק 71 קריית מלאכי (צה"ל 1) – גוגל מיקם מחוץ לעיר
@@ -194,6 +197,7 @@ def main():
             ts = d["stores"][k].get("ts", "")
             if len(ts) >= 8 and ts[:2] == "20" and ts[:8] < old: continue  # קובץ ישן מדי (הרשת לא מעדכנת)
             if k in prices and stores[k].get("ts", "") > ts: continue
+            if ONLINE.search(d["stores"][k].get("name", "")): continue    # חנות אינטרנט / מחסן משלוחים – אין לאן לנסוע
             prices[k] = v; stores[k] = d["stores"][k]
             NEVER = 2 ** 31 - 1
             ov = lambda m: {c: (tuple(v) if isinstance(v, list) else (v, NEVER)) for c, v in m.items()}

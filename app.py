@@ -560,12 +560,15 @@ def compute(u):
                 if not split or t < split["tot"]: split = {"A": A, "B": B, "tot": t, "inA": inA, "inB": inB}
     weighed = all(D.items[it["i"]][0][:1] in ("M", "W", "P") for it in items)   # רק מוצרים במשקל (בשר, דגים, ירקות…)
     stay_min = STAY_MIN_WEIGHED if weighed else STAY_MIN
-    stay = reg is not None and reg["tot"] - best["tot"] < stay_min
-    gap = reg["tot"] - best["tot"] if reg else 0
-    if stay:                                   # לא שווה לעזוב את הסופר הקבוע
-        alt = best; best = reg
-        if reg in ranked: ranked.remove(reg)
-        ranked.insert(0, reg)
+    # בלי סופר קבוע ידוע – משווים לסופר הקרוב (שיש בו את הסל): חיסכון קטן לא שווה נסיעה רחוקה
+    near_ref = None if reg else min((r for r in pool if ok_miss(r)), key=lambda r: r["d"], default=None)
+    ref = reg or near_ref
+    stay = ref is not None and ref["tot"] - best["tot"] < stay_min
+    gap = ref["tot"] - best["tot"] if ref else 0
+    if stay:                                   # לא שווה לעזוב את הסופר הקבוע / הקרוב
+        alt = best; best = ref
+        if ref in ranked: ranked.remove(ref)
+        ranked.insert(0, ref)
     s = best["s"]
     how = "נסיעה" if car else ("בתחבורה ציבורית" if bus else "הליכה")
     others = [r for r in ranked if r["s"]["key"] != s["key"]]
@@ -576,7 +579,7 @@ def compute(u):
     inc = ""
     ride = "🚗" if car else ("🚌" if bus else "🚶")
     if stay:
-        L.append(f"👍 הסופר הקבוע שלך משתלם: *{s['n']}*" + kosher_tag(s))
+        L.append((f"👍 הסופר הקבוע שלך משתלם: *{s['n']}*" if reg else f"👍 הסופר הקרוב אליך משתלם: *{s['n']}*") + kosher_tag(s))
         L.append(f"💰 מחיר הסל: *₪{best['have']:.0f}*" + (" (במחירי מועדון)" if best.get("club") else "")
                  + (f"\n❌ _חסר בסניף: {', '.join(best['mlist'][:6])}_" if best["miss"] else ""))
         L.append(f"✅ זה הכי זול באזור 🏆" if gap < 1 else f"✅ במקום אחר היית חוסך רק ₪{gap:.0f}{inc} – לא שווה את הטרחה")
@@ -584,8 +587,8 @@ def compute(u):
         L.append(f"🏆 הסופר המנצח: *{s['n']}*" + kosher_tag(s))
         L.append(f"💰 מחיר הסל: *₪{best['have']:.0f}*" + (" (במחירי מועדון)" if best.get("club") else "")
                  + (f"\n❌ _חסר בסניף: {', '.join(best['mlist'][:6])}_" if best["miss"] else ""))
-        if reg:
-            L.append(f"✅ חוסך *₪{gap:.0f}* לעומת {reg['s']['n']}{inc}")
+        if ref:
+            L.append(f"✅ חוסך *₪{gap:.0f}* לעומת {ref['s']['n']}" + ("" if reg else " (הקרוב אליך)") + inc)
         elif avg and avg - best["tot"] >= 1:
             L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}*{inc}")
     L.append(f"{ride} {round(best['min'])} דק' {how} ממך")
@@ -604,7 +607,7 @@ def compute(u):
                                                else f"~₪{med[it['i']] * it['qty']:.2f} _(חסר בסניף)_"))
     if gone: det.append("\n_לא נמצאו במאגר: " + ", ".join(gone) + "_")
     fresh = f"\n\n_מחירים ומבצעים מעודכנים ל-{D.built[8:10]}/{D.built[5:7]} {D.built[11:16]}_" if len(D.built) >= 16 else ""
-    saved = 0 if stay else (gap if reg else (avg - best["tot"] if avg else 0))
+    saved = 0 if stay else (gap if ref else (avg - best["tot"] if avg else 0))
     ip = {}
     for it in items:                                   # מחיר כל מוצר בסופר המומלץ (ל"מה זיהיתי")
         c = lc(best["P"], it)
