@@ -398,6 +398,23 @@ def _():
     assert d > 5, f"קשת טעמים בילו רק {d:.1f} ק\"מ ממרכז נס ציונה – מיקום שגוי"
     assert app.car_min(d) >= 14, app.car_min(d)
 
+@test("סופר קבוע ברחובות + מיקום בפתח תקווה: לא ממליץ על רחובות, משווה לסופרים בפתח תקווה – באג 12/10")
+def _():
+    D = kdata.D
+    reh = next(s for s in D.stores if s["key"] == "7290873255550-18")      # טיב טעם רחובות (מקבלה ישנה)
+    pt = [32.0880, 34.8860]                                                 # מרכז פתח תקווה
+    items = [dict(x) for x in BBQ_ITEMS[:1]] + [{"name": n, "qty": 1} for n in ("במבה", "חלב 3% 1 ליטר", "לחם אחיד פרוס")]
+    u = {"step": "done", "prefs": {"home": pt, "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "hist": [],
+         "stores": {reh["key"]: 3}, "items": app.match_items(items)[0]}
+    assert app.usual_store(u) is None, "סופר ברחובות נחשב 'קבוע' למי שגר בפתח תקווה"
+    r = app.compute(u)
+    assert isinstance(r, dict), r
+    assert "רחובות" not in r["main"] and "הסופר הקבוע" not in r["main"], r["main"]
+    m = re.search(r"(\d+) דק'", r["main"]); assert m and int(m.group(1)) <= 20, r["main"]
+    assert app.match_store("טיב טעם רחובות", pt) != reh["key"]               # קבלה מרחובות לא נרשמת כקבוע של פתח תקווה
+    u["prefs"]["home"] = [31.8948, 34.8113]                                # כשהמיקום ברחובות – כן נחשב קבוע
+    assert app.usual_store(u) == reh["key"]
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

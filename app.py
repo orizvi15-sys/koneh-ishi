@@ -314,7 +314,7 @@ def match_store(text, home):
     best = None
     for s in D.stores:
         d = km(home, s["p"])
-        if d > 60: continue
+        if d > REG_MAX_KM: continue                          # סניף רחוק מהבית – לא נרשם כסופר הקבוע
         ch = {kdata.stem(w) for w in kdata.toks(s["chain"])}
         if not ch or not ch <= q: continue                   # הרשת חייבת להופיע בקבלה
         nm = {kdata.stem(w) for w in kdata.toks(s["n"])} - ch
@@ -324,11 +324,14 @@ def match_store(text, home):
         if best is None or key > best[0]: best = (key, s)
     return best[1]["key"] if best else None
 
+REG_MAX_KM = 15   # "סופר קבוע" רק אם הוא ליד המיקום הנוכחי (~25 דק' ברכב). משתמש שעבר מקום – הסופר הישן לא נחשב
+
 def usual_store(u):
-    """הסניף שהמשתמש קונה בו הכי הרבה (לפי הקבלות)"""
+    """הסניף שהמשתמש קונה בו הכי הרבה (לפי הקבלות) – רק אם הוא קרוב למיקום הנוכחי"""
     c = u.get("stores") or {}
-    keys = {s["key"] for s in kdata.D.stores}
-    c = {k: v for k, v in c.items() if k in keys}
+    home = (u.get("prefs") or {}).get("home")
+    pos = {s["key"]: s["p"] for s in kdata.D.stores}
+    c = {k: v for k, v in c.items() if k in pos and (not home or km(home, pos[k]) <= REG_MAX_KM)}
     return max(c, key=c.get) if c else None
 
 # ---------- התאמת מוצרים ----------
@@ -514,7 +517,7 @@ def compute(u):
         rows.append({"s": s, "d": 2 * d1, "min": mins(d1), "P": D.store_prices(s, clubs), "club": s["chain"] in clubs and s.get("cblob", -1) >= 0})
         if len(rows) >= MAX_POOL: break
     uk = usual_store(u)
-    if uk and not any(r["s"]["key"] == uk for r in rows):      # הסופר הקבוע תמיד בהשוואה, גם אם מחוץ לטווח
+    if uk and not any(r["s"]["key"] == uk for r in rows):      # הסופר הקבוע (קרוב לבית) תמיד בהשוואה
         s0 = next(s for s in D.stores if s["key"] == uk); d1 = km(home, s0["p"])
         rows.append({"s": s0, "d": 2 * d1, "min": mins(d1), "P": D.store_prices(s0, clubs), "club": s0["chain"] in clubs and s0.get("cblob", -1) >= 0})
     # חציון מקומי למוצרים שחסרים בסניף מסוים
