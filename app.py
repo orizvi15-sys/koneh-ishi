@@ -568,7 +568,8 @@ def lc(P, it):
     w = it.get("wfb")                                  # אחרון: אותו מוצר בסיסי במשקל (בשר טחון ארוז → בשר טחון לק"ג)
     if w and w[0] in P and not any(g in P for g in it["g"]) and not any(g in P for g in it.get("fb") or []):
         g, kg = w
-        return (P[g] * kg * it["qty"], None, f"{kdata.D.items[g][1].replace(' (לק\"ג)', '')} במשקל ({kg:g} ק\"ג)")
+        nm = kdata.D.items[g][1].replace(' (לק"ג)', "")
+        return (P[g] * kg * it["qty"], None, f'{nm} במשקל ({kg:g} ק"ג)')
     for lst, sub in ((it["g"], False), (it.get("fb") or [], True)):
         best = None
         for g in lst:
