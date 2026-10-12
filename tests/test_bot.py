@@ -550,6 +550,32 @@ def _():
         got = [n for n, r in R.items() if r.search(ns["clean_produce"](name))]
         assert got == ([want] if want else []), (name, got)
 
+@test("קבלות: תפו\"א לבן = תפוח אדמה רגיל, 'ביצים 30' = תבנית של 30, מוצר שאין בשום סניף – לא 'מחיר הסל ₪0' – באגים 12/10")
+def _():
+    D = kdata.D
+    f, m = app.match_items([{"name": 'תפו"א לבן', "qty": 2.3}, {"name": "תפוא", "qty": 1}, {"name": "ביצים 30", "qty": 1}, {"name": "ביצים", "qty": 1}])
+    assert not m, m
+    assert f[0]["code"] == "P12" and f[1]["code"] == "P12", [x["name"] for x in f]
+    assert "30" in f[2]["name"] and "12" not in f[2]["name"], f[2]["name"]
+    assert f[3]["code"] == "E01", f[3]["name"]
+    i = min((j for j, it in enumerate(D.items) if it[0][:1].isdigit()), key=lambda j: D.items[j][2])   # המוצר הכי נדיר במאגר
+    have = [s["p"] for s in D.stores if i in D.store_prices(s, ())]
+    far = next(s for s in D.stores if all(app.km(p, s["p"]) > 80 for p in have))
+    u = {"step": "done", "prefs": {"home": far["p"], "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "hist": [],
+         "items": [app.item_of(D, i, 1)]}
+    r = app.compute(u)
+    if isinstance(r, dict): assert "₪0 " not in r["main"] and "₪0\n" not in r["main"], r["main"]
+    else: assert "לא מצאתי" in r[0], r
+    # כללי איסוף: "חזה טרי מחפוד" (רמי לוי) ו"עוף מוכשר שלם" (ברקת) נכנסים לקבוצה, "חזה הודו"/"חזה בקר" לא
+    src = open(os.path.join(ROOT, "tools", "collect.py"), encoding="utf-8").read()
+    ns = {"re": re}; exec(src[src.index("NO_MEAT ="):src.index("MEAT = [")], ns)
+    exec(src[src.index("MEAT = ["):src.index("]\n", src.index("MEAT = [")) + 2], ns)
+    R = [(n, re.compile(rx)) for n, rx, lo, hi in ns["MEAT"]]
+    for name, want in (("חזה טרי מחפוד", "חזה עוף"), ("חזה עוף", "חזה עוף"), ("עוף מוכשר שלם", "עוף שלם"), ("עוף שלם", "עוף שלם"),
+                       ("חזה הודו טרי", None), ("חזה בקר", None), ("חזה עוף קפוא כש", None)):
+        got = [n for n, r in R if r.search(name)]
+        assert got == ([want] if want else []), (name, got)
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

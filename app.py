@@ -396,7 +396,9 @@ BASIC_ALIAS = {"בצל": "P10", "בצלים": "P10", "בצל יבש": "P10", "ת
                "בצל אדום": "P11", "בצל סגול": "P11", "בטטות": "P15", "אבוקדו": "P29",
                "חזה עוף": "M01", "פרגיות": "M03", "כרעיים": "M04", "כרעיים עוף": "M04", "שוקיים": "M05", "שוקיים עוף": "M05",
                "כנפיים": "M06", "כנפיים עוף": "M06", "עוף שלם": "M07", "בשר טחון": "M08", "בשר בקר טחון": "M08", "אנטריקוט": "M10",
-               "סלמון": "M11", "פילה סלמון": "M11", "אמנון": "M12", "מושט": "M12", "דניס": "M13", "לברק": "M14"}
+               "סלמון": "M11", "פילה סלמון": "M11", "אמנון": "M12", "מושט": "M12", "דניס": "M13", "לברק": "M14",
+               "תפוא": "P12", "תפו\"א": "P12", "תפוא לבן": "P12", "תפו\"א לבן": "P12", "תפוח אדמה לבן": "P12", "תפוחי אדמה לבנים": "P12",
+               "תפוא אדום": "P13", "תפו\"א אדום": "P13", "חזה עוף טרי": "M01", "עוף שלם טרי": "M07"}
 # שם אחר שבו המוצר מופיע ברשתות ("שקיות זבל" = "שקיות אשפה")
 SEARCH_SYN = {"שקיות זבל": "שקיות אשפה", "נייר כסף": "נייר אלומיניום", "ירקות קפואים": "ירקות מוקפאים", "תותים": "תות שדה",
               "ניקוי רצפות": "נוזל לניקוי רצפות", "ציפס קפוא": "צ'יפס קפוא", "וניל": "סוכר וניל", "פרורי לחם": "פירורי לחם",
@@ -425,6 +427,7 @@ def weighed_fb(name):
     return (best[1], g / 1000) if g else None
 
 def basic_alias(name):
+    if re.search(r"ביצ", name) and re.search(r"(?<!\d)(1[8-9]|[2-9]\d)(?!\d)", name): return None   # "ביצים 30" = תבנית של 30, לא 12
     n = re.sub(r'(\d+(\.\d+)?|ק"ג|קג|קילו|ק\'|גרם|גר\'?|יחידות|יח\'?|תבנית|ארוז(ה|ים)?|טרי(ים|יה|ה)?|רגיל(ה|ים)?|[–\-:,()])', " ", name)
     return BASIC_ALIAS.get(" ".join(n.split()))
 
@@ -443,6 +446,11 @@ def match_items(items):
         alt = SEARCH_SYN.get(" ".join(kdata.toks(name)))
         c = d.search(alt) if alt else []
         c += [j for j in d.search(name) if j not in c]
+        m = re.search(r"(?<!\d)(1[8-9]|[2-9]\d)(?!\d)", name) if re.search(r"ביצ", name) else None
+        if m:                                            # "ביצים 30" – קודם תבניות של 30 (החיפוש הרגיל מעדיף את ה-12 הנפוצה)
+            pk = sorted((j for j in d.search(name, 60) if m.group(1) in d.itoks[j] and d.items[j][1].startswith("ביצ")
+                         and not re.search(r"אומגה|חופש|אורגני", d.items[j][1])), key=lambda j: -d.items[j][2])   # הרגילה והנפוצה קודם
+            c = pk + [j for j in c if j not in pk]
         t = kdata.toks(name)
         if len(t) > 1:                                   # "חטיף ברנפלקס" – גם בלי המילה הכללית הראשונה
             c += [j for j in d.search(" ".join(t[1:]), 3) if j not in c]
@@ -646,6 +654,9 @@ def compute(u):
     while len(items) > 1 and ((n_ok := sum(1 for r in inr if ok_miss(r))) == 0 or (n_ok < want and len(rare) < n0 // 3)):
         it = max(items, key=lambda it: sum(1 for r in inr if lc(r["P"], it) is None))
         items = [x for x in items if x["name"] != it["name"]]; rare.append(it["name"].replace(' (לק"ג)', "")); stats()   # כולל שורות כפולות של אותו מוצר
+    if all(r["miss"] == len(items) for r in inr):        # אף סניף בטווח לא מוכר אף מוצר מהסל – לא ממליצים על "₪0"
+        names = list(dict.fromkeys(it["name"].replace(' (לק"ג)', "") for it in items))
+        return [f"🔎 לא מצאתי את {', '.join(names[:5])} בסופרים באזור שלך 🙁\nאפשר לנסות לכתוב את המוצר אחרת, או לשלוח רשימה עם עוד מוצרים."]
     nearest = rows[0]
     reg = next((r for r in rows if r["s"]["key"] == uk), None)
     if reg and not ok_miss(reg): reg = None     # כנראה זיהוי סניף שגוי (או חנות שלא מוכרת את רוב הסל)
