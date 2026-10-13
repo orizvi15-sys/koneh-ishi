@@ -1007,6 +1007,89 @@ def send_reminder(to, u):
     send_buttons(to, f"היי{' ' + name if name else ''} 👋\nבדרך כלל אתה עושה קנייה בערך בזמן הזה.\n"
                      f"רוצה שאבדוק איפה הכי משתלם השבוע?", btns)
 
+# ---------- התראת מבצעים: מוצר מהסל הקבוע במבצע ליד הבית (סעיף 3 מהשיפורים, אורי 13/10) ----------
+DEAL_MIN_OFF = 0.20       # לפחות 20% הנחה מהמחיר הרגיל באותו סניף
+DEAL_MIN_SAVE = 2.0       # ולפחות ₪2 חיסכון לכמות הרגילה של הלקוח
+DEAL_EVERY_DAYS = 3       # לכל היותר הודעה אחת כל 3 ימים
+DEAL_HOURS = (17, 21)     # שעות שליחה
+_deals = {"day": ""}
+
+def deal_stores(u):
+    """הסניפים שבודקים בהם מבצעים: הסופר הקבוע + עד 5 סופרמרקטים קרובים (עד ~15 דק'), בלי חנויות נוחות/פארם"""
+    D = kdata.D; home = (u.get("prefs") or {}).get("home")
+    if not D or not home: return []
+    near = sorted((s for s in D.stores if s["chain"] not in ("יילו", "דור אלון", "סופר יודה")
+                   and not re.search(r"\bBE\b|Be\b|אקספרס|AM|PM", s["n"])
+                   and not (s["chain"] in IL_SERVER.values() and il_muted())), key=lambda s: km(home, s["p"]))
+    out = [s for s in near[:5] if car_min(km(home, s["p"])) <= 15]
+    uk = usual_store(u)
+    if uk and not any(s["key"] == uk for s in out):
+        out = [s for s in D.stores if s["key"] == uk] + out
+    return out
+
+def find_deals(u, n=5):
+    """[(חיסכון, טקסט)] – מבצעים בתוקף על מוצרים מהסל הקבוע, בסניפים הקרובים. מבצע = מחיר נמוך ב-20%+ מהמחיר הרגיל באותו סניף"""
+    D = kdata.D; L = learned(u)
+    if not L: return []
+    sts = deal_stores(u)
+    if not sts: return []
+    best = {}
+    for st in sts:
+        base = D.prices(st["blob"]); P = D.store_prices(st, tuple((u.get("prefs") or {}).get("clubs") or ()))
+        promo = D.prices(st["pblob"]) if st.get("pblob", -1) >= 0 else {}
+        for x in L:
+            i = resolve(D, x)
+            if i is None or i not in base: continue
+            reg, q = base[i], x["qty"] or 1
+            cur, txt, end = P.get(i), None, None
+            if cur is not None and cur < reg * (1 - DEAL_MIN_OFF):
+                v = promo.get(i); end = v[1] if isinstance(v, tuple) else None
+                txt = f"₪{money(cur)} במקום ₪{money(reg)}"
+            elif i in P.deals and P.deals[i][0] < reg * (1 - DEAL_MIN_OFF) and P.deals[i][1] <= max(3, 2 * q):   # "9 ב-30" למי שקונה 1 – לא
+                uu, k = P.deals[i]; cur = uu; q = max(q, k)
+                bundle = uu * k; bundle = round(bundle) if abs(bundle - round(bundle)) < 0.06 else bundle      # 29.97 → 30
+                txt = f"{k} ב־₪{money(bundle)} (במקום ₪{money(reg * k)})"
+            if txt is None: continue
+            save = (reg - cur) * q
+            if save < DEAL_MIN_SAVE: continue
+            nm = D.items[i][1].replace(' (לק"ג)', "")
+            key = f"{x.get('code')}|{st['key']}|{money(cur)}"
+            if key not in best or save > best[key][0]:
+                till = ""
+                if end and end < 2 ** 31:
+                    t = _dt.fromtimestamp(end * 60, IL_TZ); till = f" (עד {t.day}/{t.month})"
+                best[key] = (save, f"• *{nm}* – {txt} ב{st['n']}{till}", x.get("code"))
+    by_item = {}                                                   # לכל מוצר – המבצע הכי משתלם בלבד
+    for key, v in best.items():
+        if v[2] not in by_item or v[0] > by_item[v[2]][0]: by_item[v[2]] = (v[0], v[1], key)
+    return sorted(by_item.values(), reverse=True)[:n]
+
+def send_deals(to, u, now=None):
+    """שולח הודעת מבצעים אם יש מבצע חדש (שלא נשלח בשבוע האחרון) – מחזיר True אם נשלח"""
+    now = now or time.time()
+    pr = u.get("prefs") or {}
+    if pr.get("deals_off") or not pr.get("home") or u.get("remind_miss", 0) >= 3: return False
+    if now - u.get("deal_last", 0) < DEAL_EVERY_DAYS * 86400: return False
+    sent = {k: t for k, t in (u.get("deal_sent") or {}).items() if now - t < 7 * 86400}
+    deals = [d for d in find_deals(u) if d[2] not in sent]
+    if not deals: u["deal_sent"] = sent; return False
+    for d in deals: sent[d[2]] = now
+    u["deal_sent"] = sent; u["deal_last"] = now; save_users()
+    tot = sum(d[0] for d in deals)
+    send_buttons(to, f"🔥 *מבצעים על מוצרים שאתה קונה בדרך כלל* – חיסכון של עד ₪{tot:.0f}:\n\n" + "\n".join(d[1] for d in deals),
+                 [("mine", "🛒 לחשב את הסל"), ("deals_off", "🔕 בלי התראות מבצעים")])
+    return True
+
+def deals_tick():
+    """פעם ביום, בין 17:00 ל-21:00 – לכל משתמש פעיל עם סל קבוע"""
+    il = _dt.now(IL_TZ); day = il.strftime("%Y-%m-%d")
+    if not (DEAL_HOURS[0] <= il.hour < DEAL_HOURS[1]) or _deals["day"] == day: return
+    _deals["day"] = day
+    for to, u in list(USERS.items()):
+        if to.startswith("_") or not isinstance(u, dict) or not is_tg(to): continue
+        try: send_deals(to, u)
+        except Exception as ex: print("deals error", to, ex, flush=True)
+
 # ---------- שומר לילה: התראה למנהל כשמשהו בנתונים נשבר ----------
 MAJOR = {"SHUFERSAL": "שופרסל", "RAMI_LEVY": "רמי לוי", "YOHANANOF": "יוחננוף", "OSHER_AD": "אושר עד",
          "TIV_TAAM": "טיב טעם", "YAYNO_BITAN_AND_CARREFOUR": "קרפור", "VICTORY_NEW_SOURCE": "ויקטורי", "HAZI_HINAM": "חצי חינם",
@@ -1406,6 +1489,8 @@ def _reminder_loop():
         except Exception as ex: print("weekly report error", ex, flush=True)
         try: basics_daily()
         except Exception as ex: print("basics watch error", ex, flush=True)
+        try: deals_tick()
+        except Exception as ex: print("deals tick error", ex, flush=True)
         now = time.time()
         for to, u in list(USERS.items()):
             try:
@@ -1821,7 +1906,7 @@ def place_name(home):
     return f"אזור {c}" if c else "המיקום ששמרתי"
 
 SETTINGS = [("set:loc", "📍 עדכון מיקום"), ("set:club", "💳 מועדוני לקוחות"), ("set:store", "⭐ הסופר הקבוע שלי"),
-            ("set:remind", "⏰ תזכורת שבועית"), ("set:sav", "💰 כמה חסכתי"), ("set:help", "❓ איך משתמשים"),
+            ("set:remind", "⏰ תזכורת שבועית"), ("set:deals", "🔥 התראות מבצעים"), ("set:sav", "💰 כמה חסכתי"), ("set:help", "❓ איך משתמשים"),
             ("set:faq", "💬 שאלות ותשובות"),
             ("set:reset", "🔄 איפוס מלא")]
 
@@ -1912,6 +1997,12 @@ def settings_action(to, u, reply):
             return send_text(to, "⏰ התזכורת השבועית *הופעלה* – אזכיר לך שבוע אחרי הקנייה 👍")
         pr["remind_off"] = True; u.pop("remind_at", None); save_users()
         return send_text(to, "⏰ התזכורת השבועית *כובתה* 👍")
+    if reply == "set:deals":
+        if pr.get("deals_off"):
+            pr.pop("deals_off", None); save_users()
+            return send_text(to, "🔥 התראות המבצעים *הופעלו* – כשמוצר שאתה קונה בדרך כלל יהיה במבצע לידך, אשלח הודעה 👍")
+        pr["deals_off"] = True; save_users()
+        return send_text(to, "🔕 התראות המבצעים *כובו* 👍")
     if reply == "set:sav":
         return send_text(to, savings_text(u) or "עוד לא בדקת קניות החודש 🙂")
     if reply == "set:faq":
@@ -2125,6 +2216,9 @@ def handle(msg):
     if reply in ("det", "oth", "spl"):
         txt = (u.get("last") or {}).get({"det": "details", "oth": "others", "spl": "split"}[reply])
         return send_text(to, txt or "אין לי עדיין חישוב להציג – כתבו *היי* כדי להתחיל קנייה 🙂")
+    if reply == "deals_off":
+        pr["deals_off"] = True; save_users()
+        return send_text(to, "בסדר, לא אשלח יותר התראות מבצעים 👍 (להפעלה מחדש: *הגדרות* ← 🔥 התראות מבצעים)")
     if reply == "remind_off":
         pr["remind_off"] = True; u.pop("remind_at", None); save_users()
         return send_text(to, "בסדר, לא אשלח יותר תזכורות 👍 (כדי להפעיל שוב – כתבו *הגדרות*)")

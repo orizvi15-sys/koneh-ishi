@@ -811,6 +811,26 @@ def _():
     u = app.repair_user({"prefs": {"home": [32.0, 34.8]}, "items": [{"name": "חלב", "qty": 1000000}, {"name": "במבה", "qty": -2}, {"name": "x", "qty": None}, {"qty": 1}]})
     assert [x["qty"] for x in u["items"]] == [200, 1, 1], u["items"]
 
+@test("התראת מבצעים (סעיף 3, 13/10): מבצע 20%+ על מוצר מהסל הקבוע ליד הבית; לא שולח שוב תוך 3 ימים; כיבוי בהגדרות; בלי סל קבוע – כלום")
+def _():
+    to = "tg:3838"; setup_user(to, 32.0809, 34.7806)
+    names = ["חלב", "לחם אחיד", "קוטג'", "פסטה", "אורז", "שמן", "קפה", "במבה", "ביסלי", "שוקולד", "קולה", "נייר טואלט", "נוזל כלים", "טונה"]
+    f, _ = app.match_items([{"name": n, "qty": 1} for n in names])
+    u = app.USERS[to]; u["hist"] = [{"d": 1, "saved": 0, "items": [{k: x[k] for k in ("code", "name", "src", "qty")} for x in f]}] * 3
+    assert app.send_deals(to, {"step": "done", "prefs": dict(u["prefs"]), "hist": []}) is False        # בלי סל קבוע
+    deals = app.find_deals(u)
+    assert deals, "לא נמצא אף מבצע בתל אביב"
+    for save, line, code in deals:
+        assert save >= app.DEAL_MIN_SAVE and "במקום" in line, line
+        m = re.search(r"^• \*[^*]+\* – (\d+) ב", line)
+        if m: assert int(m.group(1)) <= 3, line                              # מבצע כמות – לא "9 ב-30" למי שקונה 1
+    OUT.clear(); assert app.send_deals(to, u) is True
+    t = texts()[-1]; assert "מבצעים על מוצרים שאתה קונה" in t and "deals_off" in buttons(), t[:200]
+    OUT.clear(); assert app.send_deals(to, u) is False and not texts()                                 # לא שוב תוך 3 ימים
+    press(to, "deals_off"); assert app.USERS[to]["prefs"].get("deals_off")
+    assert app.send_deals(to, app.USERS[to], now=time.time() + 10 * 86400) is False                     # כובה
+    press(to, "set:deals"); assert not app.USERS[to]["prefs"].get("deals_off")                          # הופעל מחדש
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:
