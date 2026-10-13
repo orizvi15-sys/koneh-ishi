@@ -63,8 +63,25 @@ jobs:
       - name: Upload to release
         if: always()
         run: |
+          # --clobber מוחק את הקובץ הקודם לפני ההעלאה. העלאה שנכשלה השאירה רשת בלי קובץ – והיא נעלמה מהבוט
+          # (סופר ספיר 12/10 ו-13/10). לכן: עד 3 ניסיונות לכל קובץ, ואם עדיין נכשל – מחזירים את הקובץ הקודם.
           ls out 2>/dev/null || exit 0
-          gh release upload "$REL" out/* --clobber -R "$GITHUB_REPOSITORY"
+          fail=0
+          for f in out/*; do
+            ok=0
+            for t in 1 2 3; do
+              if gh release upload "$REL" "$f" --clobber -R "$GITHUB_REPOSITORY"; then ok=1; break; fi
+              echo "העלאה נכשלה ($t/3): $f"; sleep $((t * 20))
+            done
+            if [ $ok = 0 ]; then
+              fail=1; b=$(basename "$f")
+              if [ -f "prev/$b" ]; then
+                echo "מחזיר את הקובץ הקודם: $b"
+                gh release upload "$REL" "prev/$b" --clobber -R "$GITHUB_REPOSITORY" || true
+              fi
+            fi
+          done
+          exit $fail
 
   build:
     needs: collect

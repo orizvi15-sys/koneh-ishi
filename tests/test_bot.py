@@ -708,6 +708,38 @@ def _():
     finally:
         app.claude_json = orig; meta.pop("match_mem", None)
 
+@test("השרת הישראלי מושתק (אורי 13/10): אין התראות על 5 הרשתות שלו; כשהן חוזרות להתעדכן – הודעת 'חזר' וההשתקה מתבטלת")
+def _():
+    D = kdata.D; meta = app.USERS.setdefault("_meta", {}); meta.pop("il_mute", None)
+    old = {c: dict(D.chains.get(c) or {}) for c in list(app.IL_SERVER) + ["SHUFERSAL"]}
+    try:
+        for c in app.IL_SERVER: D.chains[c] = dict(old[c], fetched="2026-01-01T00:00+02:00", stores=old[c].get("stores", 50))
+        D.chains["SHUFERSAL"] = dict(old["SHUFERSAL"], fetched="2026-01-01T00:00+02:00")
+        iss = "\n".join(app.watchdog_issues())
+        assert not any(he in iss for he in app.IL_SERVER.values()), iss
+        assert "שופרסל לא התעדכנה" in iss, iss                              # רשת רגילה – כן מתריעים
+        now = app._dt.now(app.IL_TZ).isoformat(timespec="minutes")
+        for c in app.IL_SERVER: D.chains[c]["fetched"] = now
+        iss = "\n".join(app.watchdog_issues())
+        assert "השרת הישראלי חזר" in iss and meta.get("il_mute") is False, iss
+        assert "השרת הישראלי חזר" not in "\n".join(app.watchdog_issues())     # פעם אחת בלבד
+    finally:
+        for c, v in old.items():
+            if v: D.chains[c] = v
+            else: D.chains.pop(c, None)
+        meta.pop("il_mute", None)
+
+@test("רשת קטנה שנעלמה כולה מהנתונים (סופר ספיר 13/10) – השומר מתריע, לא רק על הרשתות הגדולות")
+def _():
+    D = kdata.D; meta = app.USERS.setdefault("_meta", {}); seen = meta.setdefault("seen", {})
+    seen["SUPER_SAPIR"] = 63; saved = D.chains.pop("SUPER_SAPIR", None)
+    try:
+        iss = "\n".join(app.watchdog_issues())
+        assert "סופר ספיר נעלמה מהנתונים (היו 63 סניפים)" in iss, iss
+    finally:
+        if saved: D.chains["SUPER_SAPIR"] = saved
+        seen.pop("SUPER_SAPIR", None)
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

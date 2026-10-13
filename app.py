@@ -408,7 +408,7 @@ BASIC_ALIAS = {"בצל": "P10", "בצלים": "P10", "בצל יבש": "P10", "ת
                "תפוא אדום": "P13", "תפו\"א אדום": "P13", "חזה עוף טרי": "M01", "עוף שלם טרי": "M07",
                "צלי כתף": "M09", "כתף בקר": "M09", "בשר לגולאש": "M09", "גולאש": "M09", "בשר בקר לבישול": "M09", "בשר לבישול": "M09",
                "בשר לצלי": "M09", "שניצל עוף": "M02", "שניצל טרי": "M02", "בורי": "M15", "קרפיון": "M16", "בקלה": "M17", "פילה בקלה": "M17",
-               "הייק": "M17", "פילה הייק": "M17", "פילה אמנון": "M12", "שניצל": "M02", "שניצלים": "M02"}
+               "הייק": "M17", "פילה הייק": "M17", "פילה אמנון": "M22", "שניצל": "M02", "שניצלים": "M02"}
 # גבינות (בולגרית/צפתית/פטה) – בכוונה בלי כינוי לפריט במשקל: רוב הקונים מתכוונים לגביע של 250 גרם, לא לק"ג מהדלפק
 # שם אחר שבו המוצר מופיע ברשתות ("שקיות זבל" = "שקיות אשפה")
 SEARCH_SYN = {"שקיות זבל": "שקיות אשפה", "נייר אלומיניום": "נייר כסף", "חלב סויה": "משקה סויה", "חלב שקדים": "משקה שקדים",
@@ -1008,6 +1008,21 @@ MAJOR = {"SHUFERSAL": "שופרסל", "RAMI_LEVY": "רמי לוי", "YOHANANOF":
          "TIV_TAAM": "טיב טעם", "YAYNO_BITAN_AND_CARREFOUR": "קרפור", "VICTORY_NEW_SOURCE": "ויקטורי", "HAZI_HINAM": "חצי חינם",
          "MAHSANI_ASHUK_NEW_SOURCE": "מחסני השוק", "NETIV_HASED": "נתיב החסד", "HET_COHEN_NEW_SOURCE": "ח. כהן"}
 _watch = {"t": 0}
+# רשתות שנאספות מהשרת בישראל (GCP). אורי 13/10: עד שהשרת מתוקן – השומר לא שולח עליהן התראות.
+# ברגע שכל 5 הרשתות מתעדכנות שוב (פחות מ-6 שעות) – ההשתקה מתבטלת לבד, ונשלחת הודעה "השרת הישראלי חזר".
+IL_SERVER = {"VICTORY_NEW_SOURCE": "ויקטורי", "HAZI_HINAM": "חצי חינם", "MAHSANI_ASHUK_NEW_SOURCE": "מחסני השוק",
+             "NETIV_HASED": "נתיב החסד", "HET_COHEN_NEW_SOURCE": "ח. כהן"}
+
+def il_server_back():
+    """True כשכל רשתות השרת הישראלי עודכנו בשש השעות האחרונות"""
+    D = kdata.D
+    if not D or not getattr(D, "chains", None): return False
+    ages = [_iso_age_h((D.chains.get(c) or {}).get("fetched", "")) for c in IL_SERVER]
+    return all(a is not None and a < 6 for a in ages)
+
+def il_muted():
+    """ההתראות על רשתות השרת הישראלי מושתקות? (ברירת מחדל: כן, עד שהשרת חוזר)"""
+    return USERS.setdefault("_meta", {}).get("il_mute", True)
 
 # ---------- מונים לדוח השבועי ----------
 def wk():
@@ -1045,13 +1060,19 @@ def watchdog_issues():
         return ["⚠️ הבוט עובד על נתוני גיבוי (13 סניפים) – הקובץ הארצי לא נטען"] if D else []
     age = _iso_age_h(D.built)
     if age is not None and age > 9: out.append(f"⚠️ הנתונים לא התעדכנו כבר {age:.0f} שעות (מאז {D.built[11:16]} {D.built[8:10]}/{D.built[5:7]})")
-    for ch, he in MAJOR.items():
+    meta_ = USERS.setdefault("_meta", {})
+    if meta_.get("il_mute", True) and il_server_back():          # השרת הישראלי חזר – מבטלים השתקה ומודיעים פעם אחת
+        meta_["il_mute"] = False
+        out.append("✅ *השרת הישראלי חזר לעבוד* – ויקטורי, חצי חינם, מחסני השוק, נתיב החסד וח. כהן מתעדכנים שוב. ההתראות עליהן חזרו.")
+    for ch in dict.fromkeys(list(MAJOR) + list(D.chains) + [c for c in seen if c in CHAIN_HE]):   # כל הרשתות, לא רק הגדולות
+        he = MAJOR.get(ch) or CHAIN_HE.get(ch, ch)
+        if ch in IL_SERVER and il_muted(): continue               # מושתק עד שהשרת הישראלי מתוקן (אורי 13/10)
         info = D.chains.get(ch)
-        if not info:
+        if not info:                                              # רשת שלמה נעלמה (סופר ספיר 13/10 – העלאה שנכשלה)
             if seen.get(ch): out.append(f"⚠️ {he} נעלמה מהנתונים (היו {seen[ch]} סניפים)")
             continue
         a = _iso_age_h(info.get("fetched", ""))
-        if a is not None and a > 12: out.append(f"⚠️ {he} לא התעדכנה כבר {a:.0f} שעות")
+        if a is not None and a > 12 and ch in MAJOR: out.append(f"⚠️ {he} לא התעדכנה כבר {a:.0f} שעות")
         n = info.get("stores", 0)
         if seen.get(ch) and n < 0.75 * seen[ch]: out.append(f"⚠️ {he} ירדה מ-{seen[ch]} ל-{n} סניפים")
         elif n: seen[ch] = max(n, int(seen.get(ch, 0) * 0.9))
@@ -1060,6 +1081,7 @@ def watchdog_issues():
                      "אם השינוי אמיתי (למשל רשת באמת סגרה סניפים) – כתבו לבוט: *אשר נתונים*")
     qa = getattr(D, "qa", {}) or {}
     for ch, n in (qa.get("by_chain") or {}).items():     # בדיקת תקינות: הרבה מחירים חשודים ברשת אחת = כנראה קובץ פגום
+        if ch in IL_SERVER.values() and il_muted(): continue
         if n >= 1500: out.append(f"⚠️ {ch}: {n:,} מחירים חשודים הוסרו בעדכון האחרון (כנראה קובץ פגום אצל הרשת)")
     return out
 
@@ -1288,6 +1310,8 @@ def weekly_report():
         L += ["", "🔎 *מוצרים שהבוט לא מצא* (כדאי ללמד אותו):"] + [f"• {n} ×{c}" for n, c in top(w["notfound"])]
     if w.get("missing"):
         L += ["", "❌ *יצאו \"חסר\" בסופר המומלץ הכי הרבה:*"] + [f"• {n} ×{c}" for n, c in top(w["missing"])]
+    if il_muted():
+        L += ["", "🔇 *השרת הישראלי* (ויקטורי, חצי חינם, מחסני השוק, נתיב החסד, ח. כהן): ההתראות מושתקות עד שהשרת יחזור לעבוד."]
     bl = meta.get("basics_last") or []
     if bl:
         L += ["", "🥬 *מוצרים בסיסיים שחסרים ברוב הסניפים של רשת* (שם אחר בקבצים / לא נמכר טרי):"]
@@ -1338,7 +1362,9 @@ def basics_daily():
     if il.hour < 8 or _basics["day"] == day: return
     _basics["day"] = day
     meta = USERS.setdefault("_meta", {}); first = "basics_known" not in meta; known = set(meta.get("basics_known") or [])
-    probs = basic_coverage(); keys = {f"{ch}|{nm}" for ch, nm, *_ in probs}
+    probs = basic_coverage()
+    if il_muted(): probs = [p for p in probs if p[0] not in IL_SERVER.values()]   # מחירים ישנים – לא מעיד על שם חדש
+    keys = {f"{ch}|{nm}" for ch, nm, *_ in probs}
     new = [p for p in probs if f"{p[0]}|{p[1]}" not in known]
     meta["basics_known"] = sorted(keys); meta["basics_last"] = probs[:40]; save_users()
     if first or not new: return                              # הפעם הראשונה – רק שומרים מצב התחלתי (הרשימה המלאה בדוח השבועי)

@@ -89,6 +89,8 @@ FB_SYN = {"סבון כלים": "נוזל כלים", "נוזל כלים": "סבו
 SEARCH_UNITS = {"גר", "גרם", "ג", "ק", "קג", "ק\"ג", "קילו", "ל", "ליטר", "מל", "מ\"ל", "יח", "יחידות", "יחי", "מ"}
 UNIT_WORDS = {"ק\"ג", "קג", "קילו", "גרם", "גר", "ליטר", "מ\"ל", "מל", "יח", "יחידות", "ארוז", "ארוזה", "פרוס", "פרוסה"}
 
+PRICE_FILTER = True   # tools/price_audit.py מכבה כדי לראות את הנתונים הגולמיים
+
 class Prices(dict):
     """מילון מחירים של סניף + מבצעי כמות"""
     def __init__(self, *a):
@@ -168,7 +170,20 @@ class Data:
                 p, end, q = v if len(v) == 3 else (v[0], v[1], 1)
                 if end >= now and q > 1 and p < P.get(i, 1e9) - 0.009 and (i not in P.deals or p < P.deals[i][0]):
                     P.deals[i] = (p, q)
+        # מסנן מחירים בלתי אפשריים (ביקורת מחירים 13/10): ₪0.01 למוצר אמיתי, מחיר ל-100 גרם שנרשם כמחיר לק"ג, טעות הקלדה.
+        # מחיר זול מדי בטעות גורם לסניף "לנצח" – עדיף להתייחס אליו כ"אין נתון" ולהשתמש בחלופה / בהערכה האזורית.
+        if PRICE_FILTER:
+            items = self.items
+            for i in [i for i, p in P.items() if p <= 0.10 or self._odd_price(items[i], p)]:
+                P.pop(i, None); P.deals.pop(i, None)
         return P
+
+    @staticmethod
+    def _odd_price(it, p):
+        med = it[3] / 100 if len(it) > 3 and it[3] else 0
+        if med <= 1: return False
+        if p < 0.25 * med: return True                              # רבע מהחציון הארצי ומטה
+        return it[0][:1] in "PMW" and p > 4 * med                   # במשקל: פי 4 מהחציון = כנראה מחיר ליחידה/אריזה
 
     def price(self, store, i):
         return self.prices(store["blob"]).get(i)
