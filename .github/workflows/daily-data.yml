@@ -55,7 +55,8 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           H=$(date -u +%H)
-          if [ "$EVENT" = "schedule" ] && [ $((10#$H % 4)) -ne 0 ]; then
+          # עדכון שעתי (רק שינויים) צריך את הקובץ הקודם. אם הוא חסר (העלאה שנכשלה) – הורדה מלאה מיד, לא לחכות 4 שעות
+          if [ "$EVENT" = "schedule" ] && [ $((10#$H % 4)) -ne 0 ] && [ -s "$PREV_CHAIN_FILE" ]; then
             echo "hourly delta update"; python tools/collect.py --delta ${{ matrix.chain }} out || true
           else
             python tools/collect.py ${{ matrix.chain }} out || python tools/collect.py --status-only ${{ matrix.chain }} out
