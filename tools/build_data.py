@@ -15,7 +15,7 @@ IL = timezone(timedelta(hours=3))
 UA = {"User-Agent": "koneh-ishi-price-bot/1.0 (+https://github.com/orizvi15-sys/koneh-ishi)"}
 MAX_ITEMS = 65000
 # מיקומים שאומתו ידנית
-ONLINE = re.compile(r"אינטרנט|אונליין|online|וולט", re.I)
+ONLINE = re.compile(r"אינטרנט|אונליין|online|וולט|המפיץ|סיטונאות", re.I)   # + סיטונאות לעסקים (אורי 13/10)
 OVERRIDES = {
     "7290058140886-64": [32.5072, 34.9186],    # רמי לוי אור עקיבא – בקובץ רשום "חיפה"
     "7290785400000-17": [31.8667, 34.8040],    # קשת טעמים בילו (מרכז נטו גבעת ברנר) – מוקם לפי השם ליד נס ציונה

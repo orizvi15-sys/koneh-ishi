@@ -740,6 +740,13 @@ def _():
         if saved: D.chains["SUPER_SAPIR"] = saved
         seen.pop("SUPER_SAPIR", None)
 
+@test("שופרסל המפיץ סיטונאות לא בהשוואה (אורי 13/10)")
+def _():
+    assert not any("המפיץ" in s["n"] or "סיטונאות" in s["n"] for s in kdata.D.stores)
+    r = app.compute({"step": "done", "prefs": {"home": [31.2518, 34.7913], "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "hist": [],
+                     "items": app.match_items([{"name": n, "qty": 1} for n in ("חלב", "במבה", "פסטה", "שמן")])[0]})
+    assert "המפיץ" not in r["main"] + r["others"]
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

@@ -89,6 +89,8 @@ FB_SYN = {"סבון כלים": "נוזל כלים", "נוזל כלים": "סבו
 SEARCH_UNITS = {"גר", "גרם", "ג", "ק", "קג", "ק\"ג", "קילו", "ל", "ליטר", "מל", "מ\"ל", "יח", "יחידות", "יחי", "מ"}
 UNIT_WORDS = {"ק\"ג", "קג", "קילו", "גרם", "גר", "ליטר", "מ\"ל", "מל", "יח", "יחידות", "ארוז", "ארוזה", "פרוס", "פרוסה"}
 
+# סניפים שלא נכנסים להשוואה: שופרסל המפיץ סיטונאות (אשדוד, באר שבע) – חנות לעסקים, בלי חלב/לחם/ביצים (אורי 13/10)
+EXCLUDE_STORES = re.compile(r"המפיץ|סיטונאות")
 PRICE_FILTER = True   # tools/price_audit.py מכבה כדי לראות את הנתונים הגולמיים
 
 class Prices(dict):
@@ -385,6 +387,7 @@ def _from_bin(path):
     STORE_FIX = {"7290803800003-7": [31.8605, 34.8225]}   # יוחננוף עקרון – הכתובת "המלך חסן 1" מוקמה בטעות בשדרות
     for row in h["stores"]:
         key, chain, name, addr, city, lat, lng, blob, ts, prec = row[:10]
+        if EXCLUDE_STORES.search(name or ""): continue          # סיטונאות לעסקים – לא בהמלצות (אורי 13/10)
         cblob = row[10] if len(row) > 10 else -1
         pblob = row[11] if len(row) > 11 else -1
         mblob = row[12] if len(row) > 12 else -1
