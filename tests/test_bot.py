@@ -687,6 +687,27 @@ def _():
     P = kdata.Prices({j: 40.0}); it8 = {"name": "בשר טחון", "qty": 1.0, "i": D.code2i["M08"], "g": [D.code2i["M08"]], "fb": [], "wfb": None, "frz": [(j, kg)]}
     assert abs(app.lc(P, it8)[0] - 40.0 * max(1, round(1.0 / kg))) < 0.01
 
+@test("אותה רשימה → אותו מחיר גם כש-Claude בוחר כל פעם מוצר אחר (בדיקה יומית 13/10: ₪240 מול ₪217) + תיקון של משתמש נזכר")
+def _():
+    meta = app.USERS.setdefault("_meta", {}); meta.pop("match_mem", None)
+    orig = app.claude_json; n = [0]
+    def flaky(prompt, *a, **k):                      # כל קריאה בוחרת אפשרות אחרת – כמו Claude לא עקבי
+        if prompt.startswith("Match"):
+            n[0] += 1; arr = json.loads(prompt.rsplit("\n\n", 1)[1])
+            return [{"i": x["i"], "pick": (n[0] + x["i"]) % len(x["options"])} for x in arr]
+        return orig(prompt, *a, **k)
+    app.claude_json = flaky
+    try:
+        names = [{"name": x, "qty": 1} for x in ("גבינה צהובה", "אורז פרסי", "שמן קנולה", "קפה נמס", "במבה")]
+        a, _ = app.match_items([dict(x) for x in names]); b, _ = app.match_items([dict(x) for x in names])
+        assert [x["code"] for x in a] == [x["code"] for x in b], ([x["name"] for x in a], [x["name"] for x in b])
+        assert n[0] == 1, f"Claude נשאל שוב על שמות שכבר הוחלטו ({n[0]})"
+        u = {"my_match": {app.mkey("במבה"): b[-1]["c"][0]}}                 # המשתמש תיקן ל"במבה" אחרת
+        c, _ = app.match_items([dict(x) for x in names], u)
+        assert c[-1]["code"] == b[-1]["c"][0] and [x["code"] for x in c[:-1]] == [x["code"] for x in b[:-1]]
+    finally:
+        app.claude_json = orig; meta.pop("match_mem", None)
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

@@ -470,8 +470,16 @@ def common_first(name, c):
         return [top] + [j for j in c if j != top]
     return c
 
-def match_items(items):
+MATCH_MEM_MAX = 6000
+
+def mkey(name): return " ".join(kdata.toks(name)).strip()
+
+def match_items(items, u=None):
+    """לכל שם – המוצר במאגר. החלטה שכבר התקבלה (של Claude, או תיקון של המשתמש) נשמרת: אותו שם → תמיד אותו מוצר.
+    (בלי זה Claude בחר לפעמים מוצר אחר לאותה רשימה, והמחיר "קפץ" בין ריצות – בדיקה יומית 13/10)"""
     d = kdata.D
+    mem = USERS.setdefault("_meta", {}).setdefault("match_mem", {})
+    mine_m = (u or {}).get("my_match") or {}
     def cands(name):
         alt = SEARCH_SYN.get(" ".join(kdata.toks(name)))
         c = d.search(alt) if alt else []
@@ -491,17 +499,31 @@ def match_items(items):
         a = d.code2i.get(basic_alias(it["name"]) or "")
         if a is not None: cand[k] = [a]                 # אין מה לבחור – זה הפריט הרגיל
     picks = [c[0] if c else None for c in cand]
-    if CLAUDE_KEY and any(len(c) > 1 for c in cand):
+    fixed = [False] * len(items)
+    for k, it in enumerate(items):
+        if len(cand[k]) == 1: fixed[k] = True; continue
+        code = mine_m.get(mkey(it["name"])) or mem.get(mkey(it["name"]))
+        j = d.code2i.get(code) if code else None
+        if j is not None:
+            picks[k] = j; fixed[k] = True
+            cand[k] = [j] + [x for x in cand[k] if x != j]
+    ask = [k for k in range(len(items)) if not fixed[k] and len(cand[k]) > 1]
+    if CLAUDE_KEY and ask:
+        sub = [{"i": n, "item": items[k]["name"], "options": [d.items[x][1] for x in cand[k]]} for n, k in enumerate(ask)]
         res = claude_json("Match each Israeli supermarket item to the option that is the SAME product (type, brand if given, similar size). "
                           "A generic name with no brand/size (e.g. 'פסטה', 'אורז', 'שמן') matches the most standard everyday option of that kind – never null for it. "
                           "Null only if no option is that kind of product. Reply only a JSON array like [{\"i\":0,\"pick\":2}].\n\n" +
-                          json.dumps([{"i": i, "item": it["name"], "options": [d.items[k][1] for k in cand[i]]} for i, it in enumerate(items)], ensure_ascii=False))
+                          json.dumps(sub, ensure_ascii=False))
         if isinstance(res, list):
             for r in res:
                 try:
-                    i = int(r["i"]); k = r.get("pick")
+                    i = ask[int(r["i"])]; k = r.get("pick")
                     picks[i] = None if k is None or not cand[i] or int(k) >= len(cand[i]) else cand[i][int(k)]
                 except Exception: pass
+            for i in ask:                              # זוכרים את ההחלטה – בפעם הבאה אותו שם יקבל אותו מוצר
+                if picks[i] is not None: mem[mkey(items[i]["name"])] = d.items[picks[i]][0]
+            while len(mem) > MATCH_MEM_MAX: mem.pop(next(iter(mem)))
+            save_users()
     for i, it in enumerate(items):                     # שם כללי ("פסטה") – מוצר בסיסי לא יוצא "לא מצאתי" גם אם Claude לא בחר
         if picks[i] is None and cand[i]: picks[i] = generic_pick(it["name"], cand[i])
     def pack_qty(k, q):
@@ -1605,7 +1627,7 @@ def act_on(to, u, r, asked=False):
     if intent == "price":
         return price_answer(to, u, its[0])
     if intent == "add":
-        found, missed = match_items(its)
+        found, missed = match_items(its, u)
         if not found: return send_text(to, "לא מצאתי את זה במאגר 🙁 נסו לכתוב קצת אחרת.")
         u["items"] += [{k: x[k] for k in ("src", "code", "name", "qty", "c")} for x in found]
         u["note"] = "➕ הוספתי: " + ", ".join(x["name"] for x in found) + (f"\n(לא מצאתי: {', '.join(missed)})" if missed else "")
@@ -1625,7 +1647,7 @@ def act_on(to, u, r, asked=False):
 
 def price_answer(to, u, item):
     """שאלה על מוצר אחד: איפה הכי זול באזור (לפי המיקום וטווח הנסיעה מהאבחון)"""
-    found, _ = match_items([item])
+    found, _ = match_items([item], u)
     if not found: return send_text(to, f"לא מצאתי את *{item['name']}* במאגר 🙁 נסו לכתוב קצת אחרת.")
     x = found[0]; D = kdata.D
     pr = fill_prefs(u["prefs"]); home = pr["home"]; clubs = set(pr.get("clubs") or [])
@@ -1672,7 +1694,7 @@ def got_receipt(to, u, img, mime):
     now = int(time.time())
     # תמונה נוספת זמן קצר אחרי הקודמת – כנראה עוד חלק מאותה קבלה: מחברים לאותו סל
     if u.get("rbuf_t", 0) > now - MERGE_SEC and u.get("items") and u.get("step") in ("done", "forgot"):
-        found, missed = match_items(items)
+        found, missed = match_items(items, u)
         have = {(x["code"], x["qty"]) for x in u["items"]}
         new = [x for x in found if (x["code"], x["qty"]) not in have]   # שורות שצולמו פעמיים (חפיפה בין התמונות) – פעם אחת
         u["items"] += new; u["missed"] = ((u.get("missed") or []) + missed)[:8]; u["rbuf_t"] = now
@@ -1718,7 +1740,7 @@ def receipt_check(store_key, rows, found):
             bad.append([st["n"], f["name"][:40], round(r["price"], 2), round(ours, 2)])
 
 def got_items(to, u, items):
-    found, missed = match_items(items)
+    found, missed = match_items(items, u)
     wk_count("notfound", missed)
     if not found:
         return send_text(to, "לא מצאתי את המוצרים האלה במאגר 🙁 נסה לכתוב אותם קצת אחרת." + (f"\n({', '.join(missed[:8])})" if missed else ""))
@@ -2026,6 +2048,7 @@ def handle(msg):
             if c not in d.code2i: return
             old_code = x["code"]
             its[k] = dict(item_of(d, d.code2i[c], x["qty"], x["src"]), c=[old_code] + [z for z in x.get("c", []) if z != c][:3])
+            u.setdefault("my_match", {})[mkey(x["src"])] = c          # התיקון של המשתמש נזכר: בפעם הבאה אותו שם → המוצר שבחר
         else:
             its.pop(k)
             if not its: u["items"] = []; save_users(); return send_text(to, "הסל ריק עכשיו 🙂 אפשר לכתוב רשימה חדשה.")
