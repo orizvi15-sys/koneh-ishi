@@ -831,6 +831,28 @@ def _():
     assert app.send_deals(to, app.USERS[to], now=time.time() + 10 * 86400) is False                     # כובה
     press(to, "set:deals"); assert not app.USERS[to]["prefs"].get("deals_off")                          # הופעל מחדש
 
+@test("סבב התקלה 3 (13/10): סטטיסטיקה כשעדכון נחסם, חיסכון עם היסטוריה פגומה, פיצול – כל הסל ובחשבון נכון")
+def _():
+    kdata.GATE.clear(); kdata.GATE.update(reason="בדיקה", version="x", t=time.time())
+    app.USERS["tg:brk"] = {"step": "done"}; app.USERS["tg:brk2"] = {"prefs": None, "hist": [{"d": "x", "saved": None}]}
+    try:
+        t = app.stats_text(); assert "נחסם" in t, t[-300:]
+    finally:
+        kdata.GATE.clear(); app.USERS.pop("tg:brk", None); app.USERS.pop("tg:brk2", None)
+    for h in ([{"d": time.time(), "saved": None}], [{"d": "x", "saved": 5}], [{"d": time.time(), "saved": -50}], [{"d": time.time(), "saved": 1e9}]):
+        app.savings_text({"prefs": {}, "hist": h})
+    names = ["חלב", "לחם אחיד", "ביצים", "קוטג'", "גבינה צהובה", "פסטה", "אורז", "שמן", "קפה", "במבה", "ביסלי", "שוקולד", "קולה", "נייר טואלט",
+             "נוזל כלים", "אבקת כביסה", "עגבניה", "מלפפון", "חזה עוף", "בשר טחון", "טונה", "טחינה", "סוכר", "קמח", "שמפו", "חיתולים", "ריבה", "חמאה"]
+    f, _ = app.match_items([{"name": n, "qty": 2} for n in names])
+    found = False
+    for home in ([31.2518, 34.7913], [31.7857, 35.2007], [32.794, 34.9896]):
+        r = app.compute({"step": "done", "prefs": {"home": home, "mode": "car", "maxMin": 35, "splitMin": app.SPLIT_MIN, "clubs": []}, "hist": [], "items": [dict(x) for x in f]})
+        if not r.get("split"): continue
+        found = True
+        assert r["split"].count("• ") == len(f), (r["split"].count("• "), len(f))       # כל מוצר באחד משני הסופרים
+        save = int(re.search(r"חוסכים עוד \*₪(\d+)", r["others"]).group(1)); assert save > app.SPLIT_MIN, save
+    assert found, "פיצול לא הופעל באף עיר בסל גדול"
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

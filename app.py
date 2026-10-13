@@ -850,7 +850,9 @@ def compute(u):
     return {"main": "\n".join(L), "store": s["n"], "saved": max(0, round(saved)), "ip": ip,
             "nav": f"https://waze.com/ul?ll={s['p'][0]},{s['p'][1]}&navigate=yes",
             "details": f"📋 *הסל שלך ב{s['n']}:*\n" + "\n".join(det) + fresh,
-            "others": (f"💡 אם מתחלקים בין *{split['A']['s']['n']}* ל*{split['B']['s']['n']}* חוסכים עוד *₪{best['tot'] - split['tot']:.0f}*\n\n" if split_txt else "")
+            "others": ((f"💡 אם מתחלקים בין *{split['A']['s']['n']}* ל*{split['B']['s']['n']}* חוסכים עוד *₪{best['tot'] - split['tot']:.0f}*"
+                        + (f" – כל הסל ב-₪{split['tot']:.0f}, לעומת ~₪{best['tot']:.0f} כולל מה שחסר ב{s['n']}" if best["miss"] else "") + "\n\n")
+                       if split_txt else "")
                       + "🏪 *כל הסופרים בטווח:*\n\n" + "\n\n".join(
                 f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} *{full_name(r['s'])}*" + (" ⭐ _הקבוע שלך_" if r is reg else "") + "\n"
                 + ("      ✡️ סניף כשר\n" if is_kosher(r["s"]) else "") +
@@ -926,9 +928,10 @@ def savings_text(u, y=None, m=None):
     """סיכום לחודש (ברירת מחדל: החודש הנוכחי) + מתחילת הדרך"""
     now = _dt.now(IL_TZ)
     y, m = y or now.year, m or now.month
+    hist = repair_user(u)["hist"]
     def ym(b): t = _dt.fromtimestamp(b["d"], IL_TZ); return t.year, t.month
-    month = [b for b in u.get("hist", []) if ym(b) == (y, m)]
-    tot_m = sum(b.get("saved", 0) for b in month); tot_all = sum(b.get("saved", 0) for b in u.get("hist", []))
+    month = [b for b in hist if b["d"] and ym(b) == (y, m)]
+    tot_m = sum(b["saved"] for b in month); tot_all = sum(b["saved"] for b in hist)
     if not month: return None
     L = [f"💰 *סיכום חיסכון – {HEB_MONTHS[m - 1]}*", "", ("🛒 בדקת קנייה אחת" if len(month) == 1 else f"🛒 בדקת {len(month)} קניות")]
     if tot_m >= 1:
@@ -955,7 +958,7 @@ def monthly_summaries():
 # ---------- לוח בקרה למנהל ----------
 def stats_text():
     now = time.time(); wk = now - 7 * 86400; day = now - 86400
-    us = {k: v for k, v in USERS.items() if not k.startswith("_") and isinstance(v, dict)}
+    us = {k: repair_user(v) for k, v in USERS.items() if not k.startswith("_") and isinstance(v, dict)}   # משתמש פגום לא מפיל את הלוח
     done = [u for u in us.values() if all(k in u.get("prefs", {}) for k in PROFILE_KEYS)]
     buys = [b["d"] for u in us.values() for b in u.get("hist", [])]
     rec = [t for u in us.values() for t in u.get("receipts", [])]
@@ -972,10 +975,7 @@ def stats_text():
          f"🧾 קבלות שנסרקו: היום {sum(t > day for t in rec)} · השבוע *{sum(t > wk for t in rec)}* · סה\"כ {len(rec)}",
          f"⏰ תזכורות פעילות: {sum(1 for u in us.values() if u.get('remind_at') and not u.get('prefs', {}).get('remind_off'))}"]
     if clubs: L.append("💳 מועדונים: " + ", ".join(f"{c} {n}" for c, n in sorted(clubs.items(), key=lambda x: -x[1])))
-    iss = watchdog_issues()
-    g = kdata.GATE
-    if g: out.append(f"🛑 עדכון נתונים חדש נחסם: {g['reason']}.\nהבוט ממשיך עם הנתונים הקודמים והתקינים. "
-                     "אם השינוי אמיתי (למשל רשת באמת סגרה סניפים) – כתבו לבוט: *אשר נתונים*")
+    iss = watchdog_issues()                      # כולל גם "עדכון נתונים נחסם" (היה כאן out.append → קריסה כשהעדכון נחסם)
     qa = getattr(D, "qa", {}) or {}
     L += ["", "🛡️ " + ("הכל תקין" if not iss else f"{len(iss)} התראות:")] + iss
     if qa.get("removed") is not None: L.append(f"🧪 בדיקת מחירים: הוסרו {qa['removed']:,} מחירים חשודים בעדכון האחרון")
@@ -2041,7 +2041,10 @@ def repair_user(u):
     def good_item(x): return isinstance(x, dict) and isinstance(x.get("name"), str) and x["name"]
     u["hist"] = [b for b in (u.get("hist") if isinstance(u.get("hist"), list) else [])
                  if isinstance(b, dict) and isinstance(b.get("items"), list)]
-    for b in u["hist"]: b["items"] = [x for x in b["items"] if good_item(x)]
+    for b in u["hist"]:
+        b["items"] = [x for x in b["items"] if good_item(x)]
+        if not isinstance(b.get("d"), (int, float)): b["d"] = 0                       # תאריך פגום → לא נספר בחודש
+        if not isinstance(b.get("saved"), (int, float)) or not 0 <= b["saved"] < 10000: b["saved"] = 0
     if "items" in u and not isinstance(u["items"], list): u.pop("items")
     if isinstance(u.get("items"), list): u["items"] = [x for x in u["items"] if good_item(x)]
     for k in ("stores", "my_match"):
