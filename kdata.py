@@ -91,7 +91,8 @@ UNIT_WORDS = {"ק\"ג", "קג", "קילו", "גרם", "גר", "ליטר", "מ\"�
 
 # סניפים שלא נכנסים להשוואה: שופרסל המפיץ סיטונאות (אשדוד, באר שבע) – חנות לעסקים, בלי חלב/לחם/ביצים (אורי 13/10)
 EXCLUDE_STORES = re.compile(r"המפיץ|סיטונאות")
-PRICE_FILTER = True   # tools/price_audit.py מכבה כדי לראות את הנתונים הגולמיים
+PRICE_FILTER = True
+PRICE_CACHE = 60      # סניפים במטמון (חישוב אחד משתמש בעד 25)   # tools/price_audit.py מכבה כדי לראות את הנתונים הגולמיים
 
 class Prices(dict):
     """מילון מחירים של סניף + מבצעי כמות"""
@@ -142,26 +143,38 @@ class Data:
         for i in range(len(self.items)): self.meta(i)
         print(f"warm-up: {time.time() - t0:.1f}s", flush=True)
 
-    def prices(self, blob_no):
-        """מילון: אינדקס מוצר -> מחיר בש"ח, לבלוק (סניף) נתון"""
+    def prices(self, blob_no, cache=True):
+        """מילון: אינדקס מוצר -> מחיר בש"ח, לבלוק (סניף) נתון.
+        מטמון של PRICE_CACHE סניפים בלבד: 300 סניפים תפסו ~170MB, ובזמן עדכון הנתונים (שתי גרסאות בזיכרון) הבוט עבר
+        את 512MB של Render ונהרג (13/10). cache=False – לסריקה של כל הסניפים (שומר מוצרים בסיסיים) בלי לנפח את המטמון."""
         with self._lock:
             if blob_no in self._cache:
                 self._cache.move_to_end(blob_no); return self._cache[blob_no]
         m = self._blob(blob_no)
+        if not cache: return m
         with self._lock:
             self._cache[blob_no] = m
-            while len(self._cache) > 300: self._cache.popitem(last=False)
+            while len(self._cache) > PRICE_CACHE: self._cache.popitem(last=False)
         return m
 
-    def store_prices(self, store, clubs=()):
+    def free(self, deep=False):
+        """משחרר מטמונים (לפני טעינת גרסה חדשה – כדי ששתי גרסאות לא יחזיקו מטמון מלא בבת אחת).
+        deep: גם את אינדקס החיפוש (מחושב מחדש לבד אם צריך) – רגע לפני ההחלפה לגרסה החדשה"""
+        with self._lock: self._cache.clear()
+        self._groups.clear()
+        if deep: self._meta.clear()
+        trim_memory()
+
+    def store_prices(self, store, clubs=(), cache=True):
         """מחירי הסניף לרגע זה: מחיר רגיל + מבצעים שעדיין בתוקף (ולחבר מועדון של הרשת – גם מבצעי מועדון).
         מבצעי כמות ("3 ב-10") לא נכנסים למחיר היחידה – הם ב-P.deals = {אינדקס: (מחיר ליחידה, כמות מינימלית)}"""
-        base = self.prices(store["blob"])
+        pr = lambda b: self.prices(b, cache)
+        base = pr(store["blob"])
         layers, mlayers = [], []
-        if store.get("pblob", -1) >= 0: layers.append(self.prices(store["pblob"]))
-        if store.get("cblob", -1) >= 0 and store["chain"] in clubs: layers.append(self.prices(store["cblob"]))
-        if store.get("mblob", -1) >= 0: mlayers.append(self.prices(store["mblob"]))
-        if store.get("cmblob", -1) >= 0 and store["chain"] in clubs: mlayers.append(self.prices(store["cmblob"]))
+        if store.get("pblob", -1) >= 0: layers.append(pr(store["pblob"]))
+        if store.get("cblob", -1) >= 0 and store["chain"] in clubs: layers.append(pr(store["cblob"]))
+        if store.get("mblob", -1) >= 0: mlayers.append(pr(store["mblob"]))
+        if store.get("cmblob", -1) >= 0 and store["chain"] in clubs: mlayers.append(pr(store["cmblob"]))
         P = Prices(base); now = int(time.time() // 60)
         for L in layers:
             for i, v in L.items():
@@ -473,6 +486,13 @@ def _download(dest=None):
     os.replace(tmp, dest)
 
 
+def trim_memory():
+    """gc + החזרת זיכרון פנוי למערכת (glibc malloc_trim) – אחרת RSS נשאר גבוה גם אחרי שחרור"""
+    import gc; gc.collect()
+    try:
+        import ctypes; ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception: pass
+
 def load(force_download=True):
     """טוען נתונים. מחזיר את אובייקט הנתונים הפעיל."""
     global D, _last_try
@@ -484,6 +504,7 @@ def load(force_download=True):
                 return D                                   # אותה גרסה – לא בונים מחדש (חוסך זיכרון ו-CPU)
             if GATE and _peek_version(NEW) == GATE.get("version"):
                 return D                                   # אותו עדכון שכבר נחסם – לא בודקים שוב
+            if D is not None: D.free()                           # לפני שבונים גרסה חדשה – משחררים את המטמון של הישנה
             nd = _from_bin(NEW)
             if D is None or nd.version != D.version:
                 why = data_gate(D, nd)
@@ -492,8 +513,10 @@ def load(force_download=True):
                     print("🛑 עדכון נתונים נחסם:", why, flush=True); return D
                 GATE.clear()
                 os.replace(NEW, CACHE_FILE)
+                old, D = D, nd
+                if old is not None: old.free(deep=True); del old; trim_memory()
                 threading.Thread(target=nd.warm, daemon=True).start()
-                D = nd; print(f"נתונים: {len(D.stores)} סניפים, {len(D.items)} מוצרים, גרסה {D.version} ({time.time() - t0:.1f}s)", flush=True)
+                print(f"נתונים: {len(D.stores)} סניפים, {len(D.items)} מוצרים, גרסה {D.version} ({time.time() - t0:.1f}s)", flush=True)
             return D
         except Exception as ex:
             print("טעינת נתונים מרחוק נכשלה:", ex, flush=True)

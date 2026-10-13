@@ -747,6 +747,19 @@ def _():
                      "items": app.match_items([{"name": n, "qty": 1} for n in ("חלב", "במבה", "פסטה", "שמן")])[0]})
     assert "המפיץ" not in r["main"] + r["others"]
 
+@test("זיכרון (Render 13/10 – עבר 512MB ונהרג): מטמון מחירים קטן, סריקת כל הסניפים לא מנפחת אותו, free משחרר")
+def _():
+    D = kdata.D
+    assert kdata.PRICE_CACHE <= 80, kdata.PRICE_CACHE
+    for st in D.stores[:200]: D.prices(st["blob"])
+    assert len(D._cache) <= kdata.PRICE_CACHE, len(D._cache)
+    before = len(D._cache); app.basic_coverage()
+    assert len(D._cache) <= max(before, kdata.PRICE_CACHE), "השומר ניפח את המטמון"
+    D.free(); assert len(D._cache) == 0 and not D._groups
+    r = app.compute({"step": "done", "prefs": {"home": [32.0809, 34.7806], "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "hist": [],
+                     "items": app.match_items([{"name": "חלב", "qty": 1}, {"name": "במבה", "qty": 1}])[0]})
+    assert isinstance(r, dict)                                            # עובד גם אחרי שחרור
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

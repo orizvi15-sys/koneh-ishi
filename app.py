@@ -1341,12 +1341,14 @@ def basic_coverage(min_stores=5, bad_share=0.4):
     for ch, sts in by.items():
         if len(sts) < min_stores: continue
         miss = {k: [] for k in range(len(its))}
+        sizes = {}
         for st in sts:
-            P = D.store_prices(st, ())
+            P = D.store_prices(st, (), cache=False)          # סריקה של כל הסניפים – בלי לנפח את המטמון (זיכרון)
+            sizes[st["key"]] = len(P)
             if len(P) < 1500: continue                       # סניף קטן/קובץ חלקי – לא מעיד על הרשת
             for k, it in enumerate(its):
                 if lc(P, it) is None: miss[k].append(P)
-        n = sum(1 for st in sts if len(D.store_prices(st, ())) >= 1500)
+        n = sum(1 for st in sts if sizes.get(st["key"], 0) >= 1500)
         for k, Ps in miss.items():
             if n >= min_stores and len(Ps) >= bad_share * n:
                 w0 = D.meta(its[k]["i"])[0]; sim = collections.Counter()
