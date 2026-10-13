@@ -760,6 +760,57 @@ def _():
                      "items": app.match_items([{"name": "חלב", "qty": 1}, {"name": "במבה", "qty": 1}])[0]})
     assert isinstance(r, dict)                                            # עובד גם אחרי שחרור
 
+@test("לימוד הרגלים: 4 קבלות → סל קבוע + כמויות + סופר קבוע; קבלה בלי חלב/לחם → 'בדרך כלל אתה קונה גם'; 'כן, להוסיף' מוסיף")
+def _():
+    to = "tg:3636"; setup_user(to, 32.0880, 34.8860)
+    week = [("חלב תנובה 3% 1ל", 3), ("לחם אחיד פרוס", 2), ("קוטג' 5%", 2), ("ביצים L 12", 1), ("עגבניה", 1.4), ("במבה 80ג", 3), ("פסטה ספגטי", 2)]
+    def rcpt(items):
+        def fk(prompt, image=None, mime=None, keep_dict=False):
+            if prompt.startswith(app.RECEIPT_PROMPT[:40]) and image:
+                return {"store": "רמי לוי – שטמפפר פתח תקווה", "items": [{"name": n, "qty": q} for n, q in items], "quality": "ok", "issue": ""}
+            return fake_claude(prompt, image, mime, keep_dict)
+        orig = app.claude_json; app.claude_json = fk
+        try: OUT.clear(); photo(to)
+        finally: app.claude_json = orig
+        app.USERS[to]["rbuf_t"] = 0
+        if app.USERS[to].get("step") == "forgot": press(to, "noadd")
+    for w in range(4): rcpt(week + ([("קפה נמס", 1)] if w == 0 else []))
+    u = app.USERS[to]; L = app.learned(u); q = {x["src"]: x["qty"] for x in L}
+    assert len(L) >= 6 and not any("קפה" in x["name"] for x in L), [x["name"] for x in L]
+    assert abs(q["חלב תנובה 3% 1ל"] - 3) < 0.6, q
+    assert "רמי לוי" in next(s["n"] for s in kdata.D.stores if s["key"] == app.usual_store(u))
+    def fk2(prompt, image=None, mime=None, keep_dict=False):
+        if prompt.startswith(app.RECEIPT_PROMPT[:40]) and image:
+            return {"store": "רמי לוי – שטמפפר פתח תקווה", "items": [{"name": n, "qty": q} for n, q in week[2:]], "quality": "ok", "issue": ""}
+        return fake_claude(prompt, image, mime, keep_dict)
+    orig = app.claude_json; app.claude_json = fk2
+    try: OUT.clear(); photo(to)
+    finally: app.claude_json = orig
+    t = "\n".join(texts()); assert "בדרך כלל" in t and "חלב" in t and "לחם" in t, t[:300]
+    n0 = len(app.USERS[to]["items"]); press(to, "addf"); assert len(app.USERS[to]["items"]) >= n0 + 2
+
+@test("ניסיון התקלה 13/10: 10 הודעות במקביל מאותו משתמש, זיכרון משתמש פגום, כפתורים פגומים, כמויות קיצוניות – בלי קריסה")
+def _():
+    import threading, copy
+    to = "tg:3737"; setup_user(to, 32.0809, 34.7806); send(to, "חלב, במבה")
+    OUT.clear(); errs = []
+    def w(m):
+        try: app.safe_handle(_msg(to, type="text", text={"body": m}))
+        except Exception as ex: errs.append(ex)
+    th = [threading.Thread(target=w, args=(m,)) for m in ("חלב", "איפוס", "היי", "פסטה, אורז", "הגדרות", "איפוס מלא", "שמן", "במבה", "תודה", "חלב, ביצים")]
+    [x.start() for x in th]; [x.join(60) for x in th]
+    assert not errs and not any("משהו השתבש" in t for t in texts()), (errs, [t[:60] for t in texts() if "השתבש" in t])
+    for bad in ({"step": "done", "hist": []}, {"step": "done", "prefs": None, "hist": []}, {"step": "done", "prefs": {"home": "32,34"}, "hist": None},
+                {"step": 5, "prefs": {"home": [32.08, 34.78]}, "hist": [{"d": 1}, "x"], "items": "x", "stores": {"k": "v"}}):
+        for act in (lambda: send(to, "חלב, במבה"), lambda: send(to, "היי"), lambda: press(to, "mine"), lambda: loc(to, 31.25, 34.79)):
+            app.USERS[to] = copy.deepcopy(bad); OUT.clear(); act()
+            assert not any("משהו השתבש" in t for t in texts()), (bad, [t[:80] for t in texts()])
+    setup_user(to, 32.0809, 34.7806); send(to, "חלב, במבה")
+    for b in ("alt:x:y", "fix:abc", "fix:-1", "alt:0:99", "del:50", "st:garbage", "club:XYZ"):
+        OUT.clear(); press(to, b); assert not any("משהו השתבש" in t for t in texts()), b
+    u = app.repair_user({"prefs": {"home": [32.0, 34.8]}, "items": [{"name": "חלב", "qty": 1000000}, {"name": "במבה", "qty": -2}, {"name": "x", "qty": None}, {"qty": 1}]})
+    assert [x["qty"] for x in u["items"]] == [200, 1, 1], u["items"]
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

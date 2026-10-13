@@ -891,6 +891,10 @@ def ask(to, step, u, intro=""):
     save_users()
 
 def finish(to, u, redo=False):
+    if not (u.get("prefs") or {}).get("home"):            # אין מיקום (זיכרון פגום / כפתור ישן) – מבקשים מיקום במקום לקרוס
+        u["step"] = "loc"; save_users()
+        return send_location_request(to, "📍 כדי להשוות מחירים צריך לדעת מאיפה יוצאים – לוחצים על *שליחת המיקום שלי* למטה")
+    fill_prefs(u["prefs"])
     res = compute(u); saved = 0
     if isinstance(res, list):
         for m in res: send_text(to, m)
@@ -1936,8 +1940,30 @@ def fill_prefs(pr):
         if not isinstance(pr["splitMin"], (int, float)): pr["splitMin"] = SPLIT_MIN
     return pr
 
+def repair_user(u):
+    """זיכרון משתמש פגום (גרסה ישנה, מיזוג, עריכה ידנית) → מתקנים במקום לקרוס בכל הודעה (נמצא בניסיון התקלה 13/10)"""
+    if not isinstance(u.get("prefs"), dict): u["prefs"] = {}
+    pr = u["prefs"]; h = pr.get("home")
+    if h is not None and not (isinstance(h, (list, tuple)) and len(h) == 2 and all(isinstance(x, (int, float)) for x in h)):
+        pr.pop("home", None)
+    if not isinstance(u.get("step"), str): u["step"] = "done" if pr.get("home") else "new"
+    def good_item(x): return isinstance(x, dict) and isinstance(x.get("name"), str) and x["name"]
+    u["hist"] = [b for b in (u.get("hist") if isinstance(u.get("hist"), list) else [])
+                 if isinstance(b, dict) and isinstance(b.get("items"), list)]
+    for b in u["hist"]: b["items"] = [x for x in b["items"] if good_item(x)]
+    if "items" in u and not isinstance(u["items"], list): u.pop("items")
+    if isinstance(u.get("items"), list): u["items"] = [x for x in u["items"] if good_item(x)]
+    for k in ("stores", "my_match"):
+        if k in u and not isinstance(u[k], dict): u.pop(k)
+    if isinstance(u.get("stores"), dict): u["stores"] = {k: v for k, v in u["stores"].items() if isinstance(v, (int, float))}
+    for x in (u.get("items") or []) + [x for b in u["hist"] for x in b["items"]]:
+        q = x.get("qty")
+        if not isinstance(q, (int, float)) or q != q or q <= 0: x["qty"] = 1          # None / "שתיים" / שלילי / 0 → 1
+        elif q > 200: x["qty"] = 200                                                   # מיליון חלב → 200 לכל היותר
+    return u
+
 def handle(msg):
-    to = msg["from"]; u = user(to); t = msg.get("type"); pr = fill_prefs(u["prefs"])
+    to = msg["from"]; u = repair_user(user(to)); t = msg.get("type"); pr = fill_prefs(u["prefs"])
     reply = None
     if t == "interactive":
         it = msg["interactive"]; reply = (it.get("button_reply") or it.get("list_reply") or {}).get("id")
@@ -2060,8 +2086,9 @@ def handle(msg):
         if reply == "fix":
             btns = [(f"fix:{k}", f"{k + 1}. {x['src'][:28]}") for k, x in enumerate(its[:20])] + [("fixdone", "✅ הכל נכון")]
             return send_buttons(to, "על איזה מוצר לתקן?", btns)
-        k = int(reply.split(":")[1])
-        if k >= len(its): return
+        try: k = int(reply.split(":")[1])
+        except (ValueError, IndexError): return send_buttons(to, "על איזה מוצר לתקן?", [(f"fix:{n}", f"{n + 1}. {x['src'][:28]}") for n, x in enumerate(its[:20])])
+        if not 0 <= k < len(its): return
         x = its[k]
         if reply.startswith("fix:"):
             d = kdata.D
@@ -2071,7 +2098,9 @@ def handle(msg):
                 opts = [(f"alt:{k}:{j}", d.items[d.code2i[c]][1][:40]) for j, c in enumerate(x["c"])]
             return send_buttons(to, f"*{x['src']}* – התכוונת ל:", opts + [(f"del:{k}", "🗑️ להוריד מהסל"), ("fix", "↩️ חזרה")])
         if reply.startswith("alt:"):
-            j = int(reply.split(":")[2]); d = kdata.D
+            try: j = int(reply.split(":")[2])
+            except (ValueError, IndexError): return
+            d = kdata.D
             c = x.get("c", [])[j] if j < len(x.get("c", [])) else None
             if c not in d.code2i: return
             old_code = x["code"]
@@ -2258,7 +2287,15 @@ def crash_alert(m, ex, tb):
            f"❌ {type(ex).__name__}: {str(ex)[:200]}\n📍 {where}\n\n_המשתמש קיבל \"אופס, משהו השתבש\". אפשר להעביר לי את ההודעה הזו לתיקון._")
     for a in [a for a in admins() if is_tg(a)]: send_text(a, msg)
 
+_user_locks = {}; _user_locks_guard = threading.Lock()
+
 def safe_handle(m):
+    """הודעות של אותו משתמש – אחת אחרי השנייה (נעילה למשתמש). בלי זה, "איפוס" ו"חלב" שנשלחו כמעט ביחד
+    שינו את אותו סל במקביל ונפלו ("משהו השתבש", 13/10). משתמשים שונים ממשיכים לרוץ במקביל."""
+    with _user_locks_guard: lk = _user_locks.setdefault(m.get("from"), threading.Lock())
+    with lk: return _safe_handle(m)
+
+def _safe_handle(m):
     done = threading.Event()
     def keep_typing():   # בטלגרם "מקליד..." נעלם אחרי 5 שניות – מחדשים כל 4 שניות כל עוד עובדים
         if done.wait(1.0): return
