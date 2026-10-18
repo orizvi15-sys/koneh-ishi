@@ -97,6 +97,7 @@ UNIT_WORDS = {"ק\"ג", "קג", "קילו", "גרם", "גר", "ליטר", "מ\"�
 
 # סניפים שלא נכנסים להשוואה: שופרסל המפיץ סיטונאות (אשדוד, באר שבע) – חנות לעסקים, בלי חלב/לחם/ביצים (אורי 13/10)
 EXCLUDE_STORES = re.compile(r"המפיץ|סיטונאות")
+DELIVERY_STORES = re.compile(r"וולט|wolt", re.I)
 PRICE_FILTER = True
 PRICE_CACHE = 60      # סניפים במטמון (חישוב אחד משתמש בעד 25)   # tools/price_audit.py מכבה כדי לראות את הנתונים הגולמיים
 
@@ -112,7 +113,7 @@ class Data:
     def __init__(self, items, stores, version, built, blob_reader, source):
         self.items, self.stores, self.version, self.built, self.source = items, stores, version, built, source
         self._blob = blob_reader
-        self.chains = {}; self.qa = {}
+        self.chains = {}; self.qa = {}; self.delivery = []
         self.code2i = {it[0]: i for i, it in enumerate(items)}
         self.name2i = {}
         for i, it in enumerate(items): self.name2i.setdefault(it[1], i)
@@ -421,7 +422,7 @@ def _from_bin(path):
             else: out[i] = p[k] / 100
         return out
 
-    stores = []
+    stores, delivery = [], []
     STORE_FIX = {"7290803800003-7": [31.8605, 34.8225]}   # יוחננוף עקרון – הכתובת "המלך חסן 1" מוקמה בטעות בשדרות
     for row in h["stores"]:
         key, chain, name, addr, city, lat, lng, blob, ts, prec = row[:10]
@@ -432,9 +433,12 @@ def _from_bin(path):
         cmblob = row[13] if len(row) > 13 else -1
         if key in STORE_FIX: lat, lng = STORE_FIX[key]
         n, a = _display(chain, name, addr, city)
-        stores.append({"key": key, "chain": chain, "n": n, "a": a, "p": [lat, lng], "blob": blob, "ts": ts, "prec": prec,
-                       "cblob": cblob, "pblob": pblob, "mblob": mblob, "cmblob": cmblob})
+        st = {"key": key, "chain": chain, "n": n, "a": a, "p": [lat, lng], "blob": blob, "ts": ts, "prec": prec,
+              "cblob": cblob, "pblob": pblob, "mblob": mblob, "cmblob": cmblob}
+        # מחסן משלוחים (וולט מרקט) – לא נכנס להשוואה ולהמלצות, רק אופציה נוספת "במשלוח" (אורי 19/10)
+        (delivery if DELIVERY_STORES.search(f"{chain} {name}") else stores).append(st)
     D_ = Data(h["items"], stores, h["v"], h.get("built", ""), reader, "remote")
+    D_.delivery = delivery
     D_.chains = h.get("chains", {})
     D_.qa = h.get("qa", {})
     return D_

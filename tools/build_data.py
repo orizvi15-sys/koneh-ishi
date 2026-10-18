@@ -15,6 +15,7 @@ IL = timezone(timedelta(hours=3))
 UA = {"User-Agent": "koneh-ishi-price-bot/1.0 (+https://github.com/orizvi15-sys/koneh-ishi)"}
 MAX_ITEMS = 65000
 # מיקומים שאומתו ידנית
+WOLT = re.compile(r"וולט|wolt", re.I)
 ONLINE = re.compile(r"אינטרנט|אונליין|online|וולט|המפיץ|סיטונאות", re.I)   # + סיטונאות לעסקים (אורי 13/10)
 OVERRIDES = {
     "7290058140886-64": [32.5072, 34.9186],    # רמי לוי אור עקיבא – בקובץ רשום "חיפה"
@@ -242,7 +243,9 @@ def main():
             ts = d["stores"][k].get("ts", "")
             if len(ts) >= 8 and ts[:2] == "20" and ts[:8] < old: continue  # קובץ ישן מדי (הרשת לא מעדכנת)
             if k in prices and stores[k].get("ts", "") > ts: continue
-            if ONLINE.search(d["stores"][k].get("name", "")): continue    # חנות אינטרנט / מחסן משלוחים – אין לאן לנסוע
+            nm_ = d["stores"][k].get("name", "")
+            if ONLINE.search(nm_) and not WOLT.search(f"{d['stores'][k].get('chain', '')} {nm_} {d['chain']}"): continue   # חנות אינטרנט – אין לאן לנסוע
+            # וולט מרקט נשאר: בבוט הוא רק אופציה "במשלוח", לא בהשוואה (אורי 19/10)
             prices[k] = v; stores[k] = d["stores"][k]
             NEVER = 2 ** 31 - 1
             ov = lambda m: {c: (tuple(v) if isinstance(v, list) else (v, NEVER)) for c, v in m.items()}

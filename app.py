@@ -697,6 +697,25 @@ def frozen_alts(i):
     _frz["c"][i] = out
     return out
 
+OTHERS_SHOW = 6          # "סופרים אחרים": עד 6 סניפים, שתי שורות לכל אחד (אורי 19/10: פחות מלל)
+
+# ---------- וולט מרקט: אותה קנייה במשלוח (אורי 19/10) ----------
+WOLT_KM = 6.0            # מחסן וולט מרקט עד ~6 ק"מ (דרך) מהמיקום – כנראה באותה עיר ומשלחים אליו
+WOLT_URL = "https://wolt.com/he/isr"
+
+def delivery_option(D, home, items, med, clubs=()):
+    """אותו סל במחסן משלוחים קרוב (וולט מרקט) – אופציה נוספת בלבד, לא נכנס להשוואה/להמלצה. None אם אין או שחסר בו הרבה."""
+    near = [st for st in getattr(D, "delivery", None) or [] if km(home, st["p"]) <= WOLT_KM]
+    if not near or not items: return None
+    st = min(near, key=lambda x: km(home, x["p"]))
+    P = D.store_prices(st, clubs); have = tot = 0; mlist = []
+    for it in items:
+        c = lc(P, it)
+        if c is None: mlist.append(it["name"].replace(' (לק"ג)', "")); tot += med[it["i"]] * it["qty"]
+        else: have += c[0]; tot += c[0]
+    if len(mlist) >= MAX_MISSING or len(mlist) * 2 >= len(items): return None
+    return {"s": st, "have": have, "sum": tot, "miss": len(mlist), "mlist": mlist}
+
 def miss_est(r):
     """הערכה למוצרים שחסרים בסניף (לפי המחיר באזור) – כדי שההפרש מול הקבלה יהיה ברור (למשל ₪966 + ~₪80 על 3 חסרים)"""
     if not r.get("miss"): return ""
@@ -825,6 +844,8 @@ def compute(u):
         elif avg and avg - best["tot"] >= 1:
             L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}*{inc}")
     L.append(f"{ride} {round(best['min'])} דק' {how} ממך ({place_name(home)})")
+    dlv = delivery_option(D, home, items, med, clubs)
+    if dlv: L.append(f"🛵 או במשלוח מ*{dlv['s']['chain']}*: ₪{dlv['have']:.0f}{miss_est(dlv)} + דמי משלוח")
     if rare:                                   # רק כמה – את השמות רואים בכפתור "מה חסר" (אורי 18/10: רשימה ארוכה מבלבלת)
         nr = len(dict.fromkeys(rare))
         L.append("🔎 _" + ("מוצר אחד לא נמצא" if nr == 1 else f"{nr} מוצרים לא נמצאו") + " בסופרים באזור שלך_")
@@ -833,7 +854,8 @@ def compute(u):
         A, B = split["A"]["s"], split["B"]["s"]
         split_txt = (f"🔀 *קנייה בשני סופרים – ₪{split['tot']:.0f}*\n\n*{A['n']}* ({A['a']}):\n" + "\n".join("• " + x for x in split["inA"]) +
                      f"\n\n*{B['n']}* ({B['a']}):\n" + "\n".join("• " + x for x in split["inB"]))
-    shown = inrange[:10] + ([reg] if reg and reg not in inrange[:10] and reg in full else [])
+    shown = inrange[:OTHERS_SHOW] + ([reg] if reg and reg not in inrange[:OTHERS_SHOW] and reg in full else [])
+    if s["key"] not in {r["s"]["key"] for r in shown}: shown = [best] + shown[:OTHERS_SHOW - 1]
     # פירוט מחירי הסל בסופר המנצח
     det = []
     for it in sorted(items, key=lambda it: -((lc(best["P"], it) or (med[it["i"]] * it["qty"],))[0])):
@@ -856,13 +878,16 @@ def compute(u):
             "others": ((f"💡 אם מתחלקים בין *{split['A']['s']['n']}* ל*{split['B']['s']['n']}* חוסכים עוד *₪{best['tot'] - split['tot']:.0f}*"
                         + (f" – כל הסל ב-₪{split['tot']:.0f}, לעומת ~₪{best['tot']:.0f} כולל מה שחסר ב{s['n']}" if best["miss"] else "") + "\n\n")
                        if split_txt else "")
-                      + "🏪 *כל הסופרים בטווח:*\n\n" + "\n\n".join(
-                f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} *{full_name(r['s'])}*" + (" ⭐ _הקבוע שלך_" if r is reg else "") + "\n"
-                + ("      ✡️ סניף כשר\n" if is_kosher(r["s"]) else "") +
-                f"      📍 {r['s']['a']}\n      💰 ₪{r['have']:.0f}{miss_est(r)} · {ride} {round(r['min'])} דק'"
+                      + "🏪 *סופרים באזור:*\n\n" + "\n\n".join(
+                f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} *{full_name(r['s'])}*" + (" ✡️" if is_kosher(r["s"]) else "")
+                + (" ⭐ _הקבוע שלך_" if r is reg else "") +
+                f"\n      💰 ₪{r['have']:.0f}{miss_est(r)} · {ride} {round(r['min'])} דק'"
                 for r in shown) + fresh,
             "split": split_txt, "miss": list(best["mlist"]), "rare": list(dict.fromkeys(rare)),
-            "miss_all": [(full_name(r["s"]), list(r["mlist"])) for r in shown if r["miss"]]}
+            "miss_all": [(full_name(r["s"]), list(r["mlist"])) for r in shown if r["miss"]],
+            "stay": stay, "gap": round(gap), "ref": ref["s"]["n"] if ref else None, "ref_have": round(ref["have"]) if ref else None,
+            "have": round(best["have"]), "mins": round(best["min"]), "kosher": is_kosher(s),
+            "wolt": {"chain": dlv["s"]["chain"], "have": round(dlv["have"]), "miss": dlv["miss"]} if dlv else None}
 
 # ---------- שיחה ----------
 WELCOME = "היי{name}! 👋 אני אעזור לך לחסוך בקניות 🛒\nכמה שאלות קצרות ומתחילים 😊"
@@ -900,7 +925,8 @@ LAST_KEYS = ("details", "others", "split", "store", "ip", "miss", "rare", "miss_
 def result_buttons(res):
     """כפתורי התוצאה. כשחסרים מוצרים – כפתור "מה חסר" עם המספר, במקום רשימת שמות בהודעה (אורי 18/10)"""
     n = len(res.get("miss") or []) + len(res.get("rare") or [])
-    return ([("miss", f"❓ מה חסר ({n})")] if n else []) + [("seen", "🧾 מה זיהיתי"), ("oth", "🏪 סופרים אחרים")]
+    return (([("miss", f"❓ מה חסר ({n})")] if n else []) + [("seen", "🧾 מה זיהיתי"), ("oth", "🏪 סופרים אחרים")]
+            + ([(WOLT_URL, "🛵 להזמין בוולט")] if res.get("wolt") else []))
 
 def missing_text(last, every=False):
     """מה חסר: בסופר המומלץ (+ מה שלא נמצא באזור). every – בכל סניף ברשימת "סופרים אחרים"."""
@@ -1026,7 +1052,7 @@ def next_reminder(ts):
     elif t.hour >= 21: t = t.replace(hour=20, minute=0, second=0)
     return int(t.timestamp())
 
-PLAN_SHOW = 12   # כמה מוצרים מהסל המשוער להציג בהודעה
+PLAN_SHOW = 8   # כמה מוצרים מהסל המשוער להציג בהודעה
 
 def send_plan(to, u):
     """סעיף 1 מ-VISION (אורי 18/10): הבוט יוזם – "הנה הקנייה של השבוע": סל משוער מהקבלות + ההמלצה, והמשתמש רק מאשר או מתקן.
@@ -1040,16 +1066,73 @@ def send_plan(to, u):
     u["plan"] = int(time.time()); u["step"] = "done"
     u["last"] = {k: res.get(k) for k in LAST_KEYS}
     name = u.get("name", ""); nh = len(u.get("hist") or [])
-    lines = "\n".join(f"• {x.get('src') or x['name']}" + (f" ×{x['qty']:g}" if x["qty"] != 1 else "") for x in L[:PLAN_SHOW])   # בשם שהמשתמש מכיר
-    more = f"\n_ועוד {len(L) - PLAN_SHOW}_" if len(L) > PLAN_SHOW else ""
-    txt = (f"היי{' ' + name if name else ''} 👋 הכנתי לך את הקנייה של השבוע 🛒\n\n"
-           f"*הסל המשוער ({len(L)} מוצרים)* – מה שחוזר ב{'קנייה שלך' if nh == 1 else f'קניות האחרונות שלך ({nh})'}:\n{lines}{more}\n\n"
-           + res["main"] + "\n\n_זו הערכה – אולי משהו כבר יש בבית. אפשר להוריד מוצרים או להוסיף בהודעה._")
+    lines = ", ".join(f"{x.get('src') or x['name']}" + (f" ×{x['qty']:g}" if x["qty"] != 1 else "") for x in L[:PLAN_SHOW])   # בשם שהמשתמש מכיר
+    more = f" ועוד {len(L) - PLAN_SHOW}" if len(L) > PLAN_SHOW else ""
+    txt = (f"היי{' ' + name if name else ''} 👋 הכנתי לך את הקנייה של השבוע 🛒\n"
+           f"*הסל הרגיל שלך ({len(L)} מוצרים):* {lines}{more}\n\n"
+           + res["main"] + "\n\n_אם משהו כבר יש בבית – ✏️ לתקן._")
     n = len(res.get("miss") or []) + len(res.get("rare") or [])
     send_buttons(to, txt, [("plan_ok", "✅ מאשר"), ("fix", "✏️ לתקן את הסל")] + ([("miss", f"❓ מה חסר ({n})")] if n else [])
-                 + [("oth", "🏪 סופרים אחרים"), ("remind_off", "🔕 בלי תזכורות")])
+                 + [("oth", "🏪 סופרים אחרים"), ("remind_off", "🔕 בלי תזכורות")] + ([(WOLT_URL, "🛵 להזמין בוולט")] if res.get("wolt") else []))
     save_users()
     return True
+
+# ---------- יום הקניות הקבוע: יום לפני – בדיקה אם הסל הקבוע זול יותר במקום אחר (אורי 19/10) ----------
+DAYB_HOURS = (18, 21)     # ערב שלפני יום הקניות
+HEB_DAYS = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]   # לפי weekday() של פייתון (שני=0)
+
+def shop_day(u, now=None):
+    """היום בשבוע שהמשתמש קונה בו בדרך כלל – לפי תאריכי הקבלות בחודשיים האחרונים (כל יום נספר פעם אחת).
+    רק כשזה ברור: לפחות פעמיים באותו יום, ולפחות חצי מימי הקנייה. אחרת None (לא מנחשים מקבלה אחת)."""
+    now = now or time.time()
+    dates = {_dt.fromtimestamp(t, IL_TZ).date() for t in (u.get("receipts") or [])
+             if isinstance(t, (int, float)) and 0 <= now - t < 63 * 86400}
+    if len(dates) < 2: return None
+    c = collections.Counter(d.weekday() for d in dates)
+    day, n = c.most_common(1)[0]
+    return day if n >= 2 and n * 2 >= len(dates) else None
+
+def is_daybefore(u, il):
+    sd = shop_day(u, il.timestamp())
+    return sd is not None and (il.weekday() + 1) % 7 == sd
+
+def send_daybefore(to, u):
+    """יום לפני יום הקניות: אם הסל הקבוע זול יותר במקום אחר – הודעה קצרה עם ההמלצה. אם לא – רק "כל הכבוד"."""
+    pr = u.get("prefs") or {}
+    L = learned(u)
+    if not pr.get("home") or not L: return None
+    items = [{k: x[k] for k in ("src", "code", "name", "qty")} for x in L]
+    res = compute(dict(u, items=items))
+    if not isinstance(res, dict): return None
+    if res["stay"] or not res.get("ref"):
+        how = "באמת הכי זול באזור" if res["gap"] < 1 else f"משתלם – במקום אחר היית חוסך רק ₪{res['gap']}, לא שווה את הנסיעה"
+        send_text(to, f"✅ בדקתי את הסל הקבוע שלך לקראת מחר – *{res['store']}* {how}.\nכל הכבוד, תמשיך ככה 👏")
+        return "stay"
+    u["items"] = items; u["plan"] = int(time.time()); u["step"] = "done"
+    u["last"] = {k: res.get(k) for k in LAST_KEYS}
+    n = len(res.get("miss") or []) + len(res.get("rare") or [])
+    w = res.get("wolt")
+    txt = (f"🛒 *מחר יום קניות?* בדקתי את הסל הקבוע שלך:\n\n"
+           f"💰 ב*{res['store']}*: ₪{res['have']}" + (f" (חסרים {n})" if n else "") + f"\nבמקום ₪{res['ref_have']} ב{res['ref']}\n"
+           f"✅ *חוסך ₪{res['gap']}* · 🚗 {res['mins']} דק'" + (f"\n🛵 בוולט מרקט: ₪{w['have']} + משלוח" if w else ""))
+    send_buttons(to, txt, [("plan_ok", "✅ נלך לשם"), ("fix", "✏️ לתקן את הסל")] + ([("miss", f"❓ מה חסר ({n})")] if n else [])
+                 + [("remind_off", "🔕 בלי הודעות")])
+    u["remind_miss"] = u.get("remind_miss", 0) + 1; save_users()
+    return "switch"
+
+def daybefore_tick(now=None):
+    il = now or _dt.now(IL_TZ)
+    if not DAYB_HOURS[0] <= il.hour < DAYB_HOURS[1]: return
+    day = il.strftime("%Y-%m-%d")
+    for to, u in list(USERS.items()):
+        if to.startswith("_") or not isinstance(u, dict) or not is_tg(to): continue
+        pr = u.get("prefs") or {}
+        if pr.get("remind_off") or not pr.get("home") or u.get("remind_miss", 0) >= 3 or u.get("dayb") == day: continue
+        try:
+            if not is_daybefore(u, il): continue
+            u["dayb"] = day; save_users()
+            send_daybefore(to, u)
+        except Exception as ex: print("day-before error", to, ex, flush=True)
 
 def send_reminder(to, u):
     try:
@@ -1125,6 +1208,7 @@ def send_deals(to, u, now=None):
     pr = u.get("prefs") or {}
     if pr.get("deals_off") or not pr.get("home") or u.get("remind_miss", 0) >= 3: return False
     if now - u.get("deal_last", 0) < DEAL_EVERY_DAYS * 86400: return False
+    if is_daybefore(u, _dt.fromtimestamp(now, IL_TZ)): return False   # הערב יש הודעת "מחר יום קניות" – לא שתי הודעות
     sent = {k: t for k, t in (u.get("deal_sent") or {}).items() if now - t < 7 * 86400}
     deals = [d for d in find_deals(u) if d[2] not in sent]
     if not deals: u["deal_sent"] = sent; return False
@@ -1544,6 +1628,8 @@ def _reminder_loop():
         except Exception as ex: print("weekly report error", ex, flush=True)
         try: basics_daily()
         except Exception as ex: print("basics watch error", ex, flush=True)
+        try: daybefore_tick()
+        except Exception as ex: print("day-before tick error", ex, flush=True)
         try: deals_tick()
         except Exception as ex: print("deals tick error", ex, flush=True)
         now = time.time()
@@ -1551,6 +1637,7 @@ def _reminder_loop():
             try:
                 ra = u.get("remind_at")
                 if not ra or ra > now or u.get("prefs", {}).get("remind_off") or not is_tg(to): continue
+                if shop_day(u, now) is not None: continue      # יש יום קניות קבוע – מקבל את הודעת "מחר יום קניות" במקום
                 if now - ra > 6 * 3600:          # פספסנו (השרת היה כבוי) – לא שולחים באיחור גדול
                     u["remind_at"] = ra + 7 * 86400; continue
                 send_reminder(to, u)
@@ -1966,30 +2053,15 @@ SETTINGS = [("set:loc", "📍 עדכון מיקום"), ("set:club", "💳 מוע
             ("set:reset", "🔄 איפוס מלא")]
 
 def help_text():
-    L = ["❓ *איך משתמשים בקונה אישי*", "",
-         "🛒 *מה הבוט עושה?*",
-         "שולחים לי מה קונים – ואני משווה את המחיר של כל הסל בכל הסופרים הקרובים אליך, לפי מחירים ומבצעים "
-         "שמתעדכנים כל שעה מכל הרשתות. אני ממליץ איפה הכי משתלם לקנות וכמה תחסוך.", "",
-         "📍 *מיקום ומועדון – פעם אחת בלבד*",
-         "בפעם הראשונה אני שואל מאיפה יוצאים לקניות ואם יש לך מועדון לקוחות, וזוכר את זה. "
-         "בכל קנייה רק אוודא שהמיקום עדיין נכון.",
-         "לשינוי: *⚙️ הגדרות* ← *📍 עדכון מיקום* או *💳 מועדוני לקוחות*.", "",
-         "✍️ *איך שולחים סל?*",
-         "• *רשימה:* כותבים מה קונים – _2 חלב, לחם, קילו חזה עוף_",
-         "• *קבלה:* מצלמים קבלה מהסופר ושולחים (קבלה ארוכה – אפשר בכמה תמונות)",
-         "• *שאלה:* _כמה עולה קוטג'?_ – ואראה איפה הכי זול לידך",
-         "• *שינוי:* _תוסיף במבה_ / _תוריד את הקולה_"]
-    if GROQ_KEY or OPENAI_KEY: L.append("• *הקלטה:* אפשר גם לשלוח הודעה קולית 🎤")
-    L += ["", "🔘 *הכפתורים למטה*",
-          "• *📍 שליחת המיקום שלי* – עדכון מהיר של המיקום",
-          "• *🛒 קנייה חדשה* – מתחילים השוואה חדשה",
-          "• *📷 צילום קבלה* – שולחים קבלה להשוואה",
-          "• *⚙️ הגדרות* – מיקום, מועדונים, הסופר הקבוע, תזכורת, חיסכון ואיפוס", "",
-          "📋 *אחרי ההשוואה*",
-          "• *🧾 מה זיהיתי* – כל המוצרים והמחיר של כל אחד",
-          "• *🏪 סופרים אחרים* – השוואה מלאה בין הסניפים באזור",
-          "• *✏️ משהו לא נכון* – תיקון מוצר שזיהיתי לא נכון", "",
-          "💰 בכל רגע אפשר לכתוב *כמה חסכתי*."]
+    """קצר וברור – גם להורים (אורי 19/10: פחות מלל)"""
+    L = ["❓ *איך משתמשים – בקצרה*", "",
+         "1️⃣ שולחים מה קונים: רשימה (_חלב, לחם, 2 קוטג'_) או 📷 צילום של הקבלה",
+         "2️⃣ אני בודק את כל הסופרים לידך ואומר איפה הכי זול",
+         "3️⃣ אחרי הקנייה מצלמים את הקבלה – ככה אני לומד מה אתם קונים",
+         "📅 בערב שלפני יום הקניות שלכם אבדוק את הסל, ואגיד אם יש איפה לחסוך", "",
+         "💡 אפשר גם לכתוב: _כמה עולה קוטג'?_ · _תוסיף במבה_ · _כמה חסכתי_"]
+    if GROQ_KEY or OPENAI_KEY: L.append("🎤 אפשר גם לשלוח הודעה קולית")
+    L += ["⚙️ שינוי מיקום או מועדון: *הגדרות*"]
     return "\n".join(L)
 
 MISSING_CHAINS = ["ויקטורי", "חצי חינם", "מחסני השוק", "ח. כהן", "נתיב החסד"]   # נאספות בשרת בישראל – מוצגות כחסרות רק אם לא בנתונים

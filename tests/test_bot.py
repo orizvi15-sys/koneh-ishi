@@ -897,7 +897,7 @@ def _():
     app.USERS[to]["hist"] = [dict(h) for h in hist]
     OUT.clear(); app.send_reminder(to, app.USERS[to])
     t = texts()[-1]; u = app.USERS[to]
-    assert "הקנייה של השבוע" in t and "הסל המשוער (6 מוצרים)" in t and "מחיר הסל" in t and "הערכה" in t, t
+    assert "הקנייה של השבוע" in t and "הסל הרגיל שלך (6 מוצרים)" in t and "מחיר הסל" in t and "לתקן" in t, t
     assert "plan_ok" in str(OUT[-1].get("reply_markup")) and "fix" in str(OUT[-1].get("reply_markup")), OUT[-1]
     assert len(u["hist"]) == 3 and u.get("plan"), "הסל המשוער לא נשמר כקנייה"
     OUT.clear(); press(to, "fix"); press(to, "del:0")                            # מורידים מוצר
@@ -910,6 +910,63 @@ def _():
     assert not u.get("plan") and len(u["hist"]) == 4, (u.get("plan"), len(u["hist"]))
     to3 = "tg:plan18c"; setup_user(to3, 32.0880, 34.8860)                        # בלי היסטוריה – התזכורת הרגילה
     OUT.clear(); app.send_reminder(to3, app.USERS[to3]); assert "בדרך כלל אתה עושה קנייה" in texts()[-1]
+
+@test("וולט מרקט (אורי 19/10): אותו סל במשלוח – שורה אחת + כפתור להזמנה, רק כשיש מחסן קרוב; לא נכנס להשוואה")
+def _():
+    D = kdata.D; home = [32.0880, 34.8860]
+    src = min((st for st in D.stores if st["chain"] == "שופרסל" and "דיל" in st["n"]), key=lambda st: app.km(home, st["p"]))
+    fake = dict(src, key="wolt-test", chain="וולט מרקט", n="וולט מרקט פתח תקווה", p=[home[0] + 0.01, home[1]])
+    f, _ = app.match_items([{"name": n, "qty": 1} for n in ("חלב", "לחם אחיד", "ביצים", "קוטג'", "במבה")])
+    old = D.delivery
+    try:
+        D.delivery = [fake]
+        to = "tg:wolt19"; setup_user(to, *home); app.USERS[to]["items"] = [dict(x) for x in f]
+        OUT.clear(); app.finish(to, app.USERS[to], redo=True)
+        t = texts()[-1]; kb = str(OUT[-1].get("reply_markup"))
+        assert "במשלוח מ" in t and "וולט מרקט" in t and "דמי משלוח" in t, t
+        assert app.WOLT_URL in kb, kb
+        assert "וולט" not in app.USERS[to]["last"]["store"] and "וולט" not in app.USERS[to]["last"]["others"]   # לא בהשוואה
+        D.delivery = [dict(fake, p=[home[0] + 0.2, home[1]])]                                                  # ~25 ק"מ – לא
+        OUT.clear(); app.finish(to, app.USERS[to], redo=True)
+        assert "במשלוח" not in texts()[-1] and app.WOLT_URL not in str(OUT[-1].get("reply_markup"))
+    finally:
+        D.delivery = old
+    assert not any(kdata.DELIVERY_STORES.search(st["chain"] + " " + st["n"]) for st in D.stores)          # בנתונים: לא בין הסופרים
+
+@test("יום קניות קבוע (אורי 19/10): נלמד מהקבלות; ערב לפני – 'חוסך ₪X' אם יש זול יותר, אחרת 'כל הכבוד'; לא מנחשים מקבלה אחת")
+def _():
+    from datetime import timedelta
+    tue = app._dt(2026, 10, 13, 18, 30, tzinfo=app.IL_TZ)                                   # יום שלישי
+    now = (tue + timedelta(days=7)).timestamp()
+    u = {"receipts": [int((tue - timedelta(days=7 * k)).timestamp()) for k in range(3)]}
+    assert app.shop_day(u, now) == 1, app.shop_day(u, now)                                # שלישי (weekday=1)
+    assert app.shop_day({"receipts": u["receipts"][:1]}, now) is None                      # קבלה אחת – לא מנחשים
+    mixed = {"receipts": [int((tue - timedelta(days=k)).timestamp()) for k in (0, 8, 16, 24)]}   # ימים שונים
+    assert app.shop_day(mixed, now) is None, app.shop_day(mixed, now)
+    mon = app._dt(2026, 10, 19, 19, 0, tzinfo=app.IL_TZ); sun = mon - timedelta(days=1)
+    assert app.is_daybefore(u, mon) and not app.is_daybefore(u, sun)
+    to = "tg:dayb19"; setup_user(to, 32.0880, 34.8860)
+    f, _ = app.match_items([{"name": n, "qty": 1} for n in ("חלב", "לחם אחיד", "ביצים", "קוטג'")])
+    U = app.USERS[to]; U["receipts"] = list(u["receipts"])
+    U["hist"] = [{"d": t, "saved": 0, "items": [{"code": x["code"], "name": x["name"], "src": x["src"], "qty": x["qty"]} for x in f]} for t in U["receipts"]]
+    orig = app.compute
+    try:
+        base = {"main": "", "store": "רמי לוי שטמפפר", "saved": 0, "ip": {}, "nav": "https://waze.com/x", "details": "📋 הסל שלך", "others": "",
+                "split": None, "miss": [], "rare": [], "miss_all": [], "have": 310, "mins": 9, "kosher": True, "wolt": None}
+        app.compute = lambda uu: dict(base, stay=False, gap=42, ref="שופרסל יש פ\"ת", ref_have=352)
+        OUT.clear(); assert app.send_daybefore(to, U) == "switch"
+        t = texts()[-1]; assert "מחר יום קניות" in t and "חוסך ₪42" in t and "₪352" in t and "plan_ok" in str(OUT[-1].get("reply_markup")), t
+        assert len(t) < 260, len(t)                                                         # הודעה קצרה
+        app.compute = lambda uu: dict(base, stay=True, gap=4, ref="רמי לוי שטמפפר", ref_have=314)
+        OUT.clear(); assert app.send_daybefore(to, U) == "stay"
+        t = texts()[-1]; assert "משתלם" in t and "רק ₪4" in t and "כל הכבוד" in t, t
+    finally:
+        app.compute = orig
+    OUT.clear(); U.pop("dayb", None); U["remind_miss"] = 0
+    app.daybefore_tick(now=mon); assert texts() and U.get("dayb") == mon.strftime("%Y-%m-%d")   # חישוב אמיתי – בלי קריסה
+    n = len(OUT); app.daybefore_tick(now=mon); assert len(OUT) == n                                # פעם אחת בערב
+    U.pop("dayb", None); OUT.clear(); app.daybefore_tick(now=sun); assert not texts()               # לא ערב לפני
+    assert app.send_deals(to, U, now=mon.timestamp()) is False                                       # לא שתי הודעות באותו ערב
 
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
