@@ -7,7 +7,7 @@
 הרצה מקומית:  DATA_CACHE=/path/koneh-data.bin python3 tests/test_bot.py
 (בלי מפתחות אמיתיים: Claude מוחלף ב"Claude מזויף" שעונה תשובות קבועות, וכלום לא נשלח לטלגרם)
 """
-import json, os, re, sys, tempfile, time, traceback
+import html, json, os, re, sys, tempfile, time, traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -386,9 +386,8 @@ def _():
              "items": [dict(x) for x in BBQ_ITEMS]}
         r = app.compute(u)
         assert isinstance(r, dict), r
-        for blk in [r["main"]] + r["others"].split("\n\n"):
-            m = re.search(r"חסר בסניף: ([^_]*)_", blk)
-            if m: assert len(m.group(1).split(", ")) < app.MAX_MISSING, blk[:300]
+        for nm, ml in r["miss_all"] + [("המומלץ", r["miss"])]:
+            assert len(ml) < app.MAX_MISSING, (nm, ml)
         assert r["main"].count("שיפודי פרגיות") <= 1, r["main"]          # שורה כפולה מהקבלה = מוצר אחד
 
 @test("קשת טעמים בילו ממוקם בגבעת ברנר, לא ליד נס ציונה (זמן נסיעה שגוי) – באג 12/10, פעם שנייה")
@@ -501,8 +500,9 @@ def _():
         u = {"step": "done", "prefs": {"home": [lat, lng], "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "hist": [],
              "items": [dict(x) for x in BBQ_ITEMS]}
         r = app.compute(u)
-        for blk in [r["main"]] + r["others"].split("\n\n"):
-            if "חסר בסניף" in blk: assert "שחסר" in blk, blk[:300]
+        if r["miss"]: assert "שחסר" in r["main"], r["main"][:300]
+        for nm, ml in r["miss_all"]:
+            blk = next(b for b in r["others"].split("\n\n") if nm in b); assert "שחסר" in blk, blk[:300]
 
 @test("'מה זיהיתי' מסודר לפי מחלקות בסופר (ירקות, חלב, ניקיון...) – סעיף 5, בקשה 12/10")
 def _():
@@ -602,7 +602,7 @@ def _():
     for home in ((32.7600, 34.9710), (31.8140, 34.7790)):                   # טירת כרמל, גדרה (12/10: AM:PM / אקספרס בלי חזה עוף)
         r = app.compute({"step": "done", "prefs": {"home": list(home), "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "hist": [], "items": [dict(x) for x in f]})
         if "הסופר הקרוב אליך משתלם" in r["main"]:
-            assert "חסר בסניף" not in r["main"], r["main"]
+            assert not r["miss"], (r["miss"], r["main"])
 
 @test("קבלה: 'שופרסל דיל קריית אתא' → סניף דיל (לא BE), 'חלות' בסניף בלי המותג → חלה אחרת, שם אזור לפי הסניף הצמוד – באגים 12/10")
 def _():
@@ -616,8 +616,7 @@ def _():
     f, m = app.match_items([{"name": "חלות", "qty": 2}])
     u = {"step": "done", "prefs": {"home": st["p"], "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "hist": [], "items": f}
     r = app.compute(u)
-    blk = next(b for b in r["others"].split("\n\n") if "אונו" in b)
-    assert "חסר בסניף" not in blk, blk
+    assert not any(st["n"] in nm or "אונו" in nm and st["chain"] in nm for nm, ml in r["miss_all"]), r["miss_all"]
     for town, p in (("ירוחם", (30.987, 34.929)), ("שלומי", (33.075, 35.145))):
         assert app.place_name(p) == f"אזור {town}", (town, app.place_name(p))
 
@@ -647,13 +646,14 @@ def _():
         del D.items[-2:]
     # שומר: פעם ראשונה – שקט; בעיה ידועה – שקט; בעיה חדשה – התראה למנהל
     meta = app.USERS.setdefault("_meta", {}); meta.pop("basics_known", None); app._basics["day"] = ""
+    AT10 = app._dt.now(app.IL_TZ).replace(hour=10)          # השומר רץ רק אחרי 08:00 – בלי זה הבדיקה נכשלה בלילה (18/10)
     orig = app.basic_coverage
     try:
         app.basic_coverage = lambda: [("רשת א", "עגבנייה", 9, 10, ["עגבניות טבע (לק\"ג)"])]
-        OUT.clear(); app.basics_daily(); assert not any("שומר מוצרים" in t for t in texts()), "שלח בהפעלה ראשונה"
-        app._basics["day"] = ""; OUT.clear(); app.basics_daily(); assert not any("שומר מוצרים" in t for t in texts()), "שלח שוב בעיה ידועה"
+        OUT.clear(); app.basics_daily(now=AT10); assert not any("שומר מוצרים" in t for t in texts()), "שלח בהפעלה ראשונה"
+        app._basics["day"] = ""; OUT.clear(); app.basics_daily(now=AT10); assert not any("שומר מוצרים" in t for t in texts()), "שלח שוב בעיה ידועה"
         app.basic_coverage = lambda: [("רשת א", "עגבנייה", 9, 10, []), ("רשת ב", "בננה", 7, 8, ["בננה טבע (לק\"ג)"])]
-        app._basics["day"] = ""; OUT.clear(); app.basics_daily()
+        app._basics["day"] = ""; OUT.clear(); app.basics_daily(now=AT10)
         t = "\n".join(texts()); assert "רשת ב" in t and "בננה טבע" in t and "רשת א" not in t, t
         assert "מוצרים בסיסיים שחסרים" in app.weekly_report()
     finally:
@@ -867,6 +867,49 @@ def _():
             i = D.code2i[x["code"]]
             bad = [D.items[j][1] for j in D.fallback(i, q) if re.match(r"(משקה|רוטב|סלט|קונפיטורת|מלית|סירופ|ביסקוויט|מעדן|המבורגר|ערגליות)", D.items[j][1])]
             assert not bad, (q, bad)
+
+@test("חסרים (אורי 18/10): בהודעה רק כמה חסרים, לא רשימת שמות; כפתור 'מה חסר (N)' מציג אותם; גם בסופרים אחרים")
+def _():
+    to = "tg:miss18"; setup_user(to, 31.8948, 34.8113)                         # רחובות
+    app.USERS[to]["items"] = [dict(x) for x in BBQ_ITEMS]
+    OUT.clear(); app.finish(to, app.USERS[to], redo=True)
+    last = app.USERS[to]["last"]; main = next(t for t in texts() if "מחיר הסל" in t)
+    assert "חסר בסניף:" not in main and "חסר בסניף:" not in last["others"], (main, last["others"][:400])
+    n = len(last["miss"]) + len(last["rare"])
+    assert n, "בסל הזה תמיד חסר משהו"
+    assert f"מה חסר ({n})" in str(OUT[-1].get("reply_markup")), OUT[-1].get("reply_markup")
+    OUT.clear(); press(to, "miss"); t = html.unescape(texts()[-1])
+    for x in last["miss"] + last["rare"]: assert x in t, (x, t)
+    if last["miss_all"]:
+        OUT.clear(); press(to, "oth"); assert "missall" in str(OUT[-1]), OUT[-1]
+        OUT.clear(); press(to, "missall"); t = html.unescape(texts()[-1])
+        for nm, ml in last["miss_all"]: assert nm in t and all(x in t for x in ml), t
+    for nm, ml in last["miss_all"]: assert len(ml) < app.MAX_MISSING                # עד 3 חסרים בסניף
+    to2 = "tg:miss18b"; setup_user(to2, 31.8948, 34.8113)
+    f, _ = app.match_items([{"name": "חלב", "qty": 1}]); app.USERS[to2]["items"] = f
+    OUT.clear(); app.finish(to2, app.USERS[to2], redo=True); assert "מה חסר" not in str(OUT[-1].get("reply_markup")), OUT[-1]
+
+@test("סעיף 1 מ-VISION (אורי 18/10): הבוט יוזם 'הקנייה של השבוע' – סל משוער + המלצה לאישור; תחזית לא נשמרת כקנייה; תיקון ואישור")
+def _():
+    to = "tg:plan18"; setup_user(to, 32.0880, 34.8860)
+    f, _ = app.match_items([{"name": n, "qty": q} for n, q in (("חלב", 2), ("לחם אחיד", 1), ("ביצים", 1), ("קוטג'", 2), ("עגבניה", 1.5), ("במבה", 3))])
+    hist = [{"d": int(time.time()) - k * 7 * 86400, "saved": 0, "items": [{"code": x["code"], "name": x["name"], "src": x["src"], "qty": x["qty"]} for x in f]} for k in (3, 2, 1)]
+    app.USERS[to]["hist"] = [dict(h) for h in hist]
+    OUT.clear(); app.send_reminder(to, app.USERS[to])
+    t = texts()[-1]; u = app.USERS[to]
+    assert "הקנייה של השבוע" in t and "הסל המשוער (6 מוצרים)" in t and "מחיר הסל" in t and "הערכה" in t, t
+    assert "plan_ok" in str(OUT[-1].get("reply_markup")) and "fix" in str(OUT[-1].get("reply_markup")), OUT[-1]
+    assert len(u["hist"]) == 3 and u.get("plan"), "הסל המשוער לא נשמר כקנייה"
+    OUT.clear(); press(to, "fix"); press(to, "del:0")                            # מורידים מוצר
+    assert len(u["items"]) == 5 and len(u["hist"]) == 3 and u["hist"][-1]["items"][0]["code"] == f[0]["code"], "תיקון התחזית דרס קנייה אמיתית"
+    assert "plan_ok" in str(OUT[-1].get("reply_markup")), OUT[-1]
+    OUT.clear(); press(to, "plan_ok"); t = "\n".join(texts())
+    assert "סגור" in t and "waze.com" in t and "הסל שלך" in t, t[:300]
+    OUT.clear(); send(to, "חלב, פסטה")                                          # רשימה חדשה = קנייה רגילה
+    if u.get("step") == "forgot": press(to, "noadd")                            # "בדרך כלל אתה קונה גם…"
+    assert not u.get("plan") and len(u["hist"]) == 4, (u.get("plan"), len(u["hist"]))
+    to3 = "tg:plan18c"; setup_user(to3, 32.0880, 34.8860)                        # בלי היסטוריה – התזכורת הרגילה
+    OUT.clear(); app.send_reminder(to3, app.USERS[to3]); assert "בדרך כלל אתה עושה קנייה" in texts()[-1]
 
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])

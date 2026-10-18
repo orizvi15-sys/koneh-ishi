@@ -814,23 +814,26 @@ def compute(u):
     if stay:
         L.append((f"👍 הסופר הקבוע שלך משתלם: *{s['n']}*" if reg else f"👍 הסופר הקרוב אליך משתלם: *{s['n']}*") + kosher_tag(s))
         L.append(f"💰 מחיר הסל: *₪{best['have']:.0f}*" + miss_est(best) + (" (במחירי מועדון)" if best.get("club") else "")
-                 + (f"\n❌ _חסר בסניף: {', '.join(best['mlist'][:6])}_" if best["miss"] else ""))
+                 )
         L.append(f"✅ זה הכי זול באזור 🏆" if gap < 1 else f"✅ במקום אחר היית חוסך רק ₪{gap:.0f}{inc} – לא שווה את הטרחה")
     else:
         L.append(f"🏆 הסופר המנצח: *{s['n']}*" + kosher_tag(s))
         L.append(f"💰 מחיר הסל: *₪{best['have']:.0f}*" + miss_est(best) + (" (במחירי מועדון)" if best.get("club") else "")
-                 + (f"\n❌ _חסר בסניף: {', '.join(best['mlist'][:6])}_" if best["miss"] else ""))
+                 )
         if ref:
             L.append(f"✅ חוסך *₪{gap:.0f}* לעומת {ref['s']['n']}" + ("" if reg else " (הקרוב אליך)") + inc)
         elif avg and avg - best["tot"] >= 1:
             L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}*{inc}")
     L.append(f"{ride} {round(best['min'])} דק' {how} ממך ({place_name(home)})")
-    if rare: L.append("🔎 _לא נמצאו בסופרים באזור שלך: " + ", ".join(dict.fromkeys(rare)) + "_")
+    if rare:                                   # רק כמה – את השמות רואים בכפתור "מה חסר" (אורי 18/10: רשימה ארוכה מבלבלת)
+        nr = len(dict.fromkeys(rare))
+        L.append("🔎 _" + ("מוצר אחד לא נמצא" if nr == 1 else f"{nr} מוצרים לא נמצאו") + " בסופרים באזור שלך_")
     split_txt = None
     if split and best["tot"] - split["tot"] > split_min:
         A, B = split["A"]["s"], split["B"]["s"]
         split_txt = (f"🔀 *קנייה בשני סופרים – ₪{split['tot']:.0f}*\n\n*{A['n']}* ({A['a']}):\n" + "\n".join("• " + x for x in split["inA"]) +
                      f"\n\n*{B['n']}* ({B['a']}):\n" + "\n".join("• " + x for x in split["inB"]))
+    shown = inrange[:10] + ([reg] if reg and reg not in inrange[:10] and reg in full else [])
     # פירוט מחירי הסל בסופר המנצח
     det = []
     for it in sorted(items, key=lambda it: -((lc(best["P"], it) or (med[it["i"]] * it["qty"],))[0])):
@@ -857,9 +860,9 @@ def compute(u):
                 f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} *{full_name(r['s'])}*" + (" ⭐ _הקבוע שלך_" if r is reg else "") + "\n"
                 + ("      ✡️ סניף כשר\n" if is_kosher(r["s"]) else "") +
                 f"      📍 {r['s']['a']}\n      💰 ₪{r['have']:.0f}{miss_est(r)} · {ride} {round(r['min'])} דק'"
-                + (f"\n      ❌ _חסר בסניף: {', '.join(r['mlist'][:6])}_" if r["miss"] else "")
-                for r in (inrange[:10] + ([reg] if reg and reg not in inrange[:10] and reg in full else []))) + fresh,
-            "split": split_txt}
+                for r in shown) + fresh,
+            "split": split_txt, "miss": list(best["mlist"]), "rare": list(dict.fromkeys(rare)),
+            "miss_all": [(full_name(r["s"]), list(r["mlist"])) for r in shown if r["miss"]]}
 
 # ---------- שיחה ----------
 WELCOME = "היי{name}! 👋 אני אעזור לך לחסוך בקניות 🛒\nכמה שאלות קצרות ומתחילים 😊"
@@ -892,23 +895,46 @@ def ask(to, step, u, intro=""):
             send_buttons(to, intro + "*ומה קונים?*", [("cam", "📷 צילום קבלה"), ("list", "✍️ אכתוב רשימה"), ("weekly", "🛒 סל שבועי רגיל")])
     save_users()
 
+LAST_KEYS = ("details", "others", "split", "store", "ip", "miss", "rare", "miss_all", "nav")
+
+def result_buttons(res):
+    """כפתורי התוצאה. כשחסרים מוצרים – כפתור "מה חסר" עם המספר, במקום רשימת שמות בהודעה (אורי 18/10)"""
+    n = len(res.get("miss") or []) + len(res.get("rare") or [])
+    return ([("miss", f"❓ מה חסר ({n})")] if n else []) + [("seen", "🧾 מה זיהיתי"), ("oth", "🏪 סופרים אחרים")]
+
+def missing_text(last, every=False):
+    """מה חסר: בסופר המומלץ (+ מה שלא נמצא באזור). every – בכל סניף ברשימת "סופרים אחרים"."""
+    L = []
+    if every:
+        for nm, ml in last.get("miss_all") or []: L.append(f"*{nm}*\n" + "\n".join("• " + x for x in ml))
+        return "❌ *מה חסר בכל סניף:*\n\n" + "\n\n".join(L) if L else "בכל הסניפים ברשימה יש את כל הסל 👍"
+    if last.get("miss"):
+        L.append(f"❌ *חסר ב{last.get('store', 'סופר המומלץ')}:*\n" + "\n".join("• " + x for x in last["miss"])
+                 + "\n_המחיר שלהם בסל הוא הערכה לפי הסופרים באזור._")
+    if last.get("rare"):
+        L.append("🔎 *לא נמצאו בסופרים באזור שלך* (לא נכללו בהשוואה):\n" + "\n".join("• " + x for x in last["rare"]))
+    return "\n\n".join(L) or "לא חסר כלום בסופר המומלץ 👍"
+
 def finish(to, u, redo=False):
     if not (u.get("prefs") or {}).get("home"):            # אין מיקום (זיכרון פגום / כפתור ישן) – מבקשים מיקום במקום לקרוס
         u["step"] = "loc"; save_users()
         return send_location_request(to, "📍 כדי להשוות מחירים צריך לדעת מאיפה יוצאים – לוחצים על *שליחת המיקום שלי* למטה")
     fill_prefs(u["prefs"])
+    if not redo: u.pop("plan", None)                       # רשימה/קבלה חדשה – כבר לא הסל המשוער
     res = compute(u); saved = 0
     if isinstance(res, list):
         for m in res: send_text(to, m)
     else:
-        u["last"] = {k: res[k] for k in ("details", "others", "split", "store", "ip")}; saved = res.get("saved", 0)
+        u["last"] = {k: res.get(k) for k in LAST_KEYS}; saved = res.get("saved", 0)
         if not redo:
             wk_count("baskets")
             wk_count("missing", [f"{x['name']} @ {res['store']}" for x in u["items"] if (res["ip"].get(x.get("code", "")) or [0, False])[1]])
         n, miss = len(u["items"]), len(u.get("missed") or [])
         main = res["main"] + f"\n🧾 זיהיתי {n} מוצרים" + (f" ({miss} לא נמצאו)" if miss else "")
         if u.get("note"): main += "\n\n" + u.pop("note")
-        send_buttons(to, main, [("seen", "🧾 מה זיהיתי"), ("oth", "🏪 סופרים אחרים")])
+        send_buttons(to, main, ([("plan_ok", "✅ מאשר")] if u.get("plan") else []) + result_buttons(res))
+    if u.get("plan"):                                     # תיקון של הסל המשוער – תחזית, לא קנייה: לא נכנס להיסטוריה
+        u["step"] = "done"; save_users(); return
     entry = {"d": int(time.time()), "saved": saved, "items": [{"code": x.get("code", ""), "name": x["name"], "src": x.get("src", ""), "qty": x["qty"]} for x in u["items"]]}
     if redo and u["hist"]: u["hist"][-1] = entry          # תיקון – מחליפים את הקנייה האחרונה במקום להוסיף
     else: u["hist"] = (u["hist"] + [entry])[-12:]
@@ -1000,7 +1026,36 @@ def next_reminder(ts):
     elif t.hour >= 21: t = t.replace(hour=20, minute=0, second=0)
     return int(t.timestamp())
 
+PLAN_SHOW = 12   # כמה מוצרים מהסל המשוער להציג בהודעה
+
+def send_plan(to, u):
+    """סעיף 1 מ-VISION (אורי 18/10): הבוט יוזם – "הנה הקנייה של השבוע": סל משוער מהקבלות + ההמלצה, והמשתמש רק מאשר או מתקן.
+    זו תחזית, לא עובדה: לא נשמרת בהיסטוריה (לא "לומדים" מהסל שהבוט עצמו הציע). מחזיר False אם אין מספיק כדי להציע."""
+    if not (u.get("prefs") or {}).get("home"): return False
+    L = learned(u)
+    if not L: return False
+    u["items"] = [{k: x[k] for k in ("src", "code", "name", "qty")} for x in L]
+    res = compute(u)
+    if not isinstance(res, dict): return False
+    u["plan"] = int(time.time()); u["step"] = "done"
+    u["last"] = {k: res.get(k) for k in LAST_KEYS}
+    name = u.get("name", ""); nh = len(u.get("hist") or [])
+    lines = "\n".join(f"• {x.get('src') or x['name']}" + (f" ×{x['qty']:g}" if x["qty"] != 1 else "") for x in L[:PLAN_SHOW])   # בשם שהמשתמש מכיר
+    more = f"\n_ועוד {len(L) - PLAN_SHOW}_" if len(L) > PLAN_SHOW else ""
+    txt = (f"היי{' ' + name if name else ''} 👋 הכנתי לך את הקנייה של השבוע 🛒\n\n"
+           f"*הסל המשוער ({len(L)} מוצרים)* – מה שחוזר ב{'קנייה שלך' if nh == 1 else f'קניות האחרונות שלך ({nh})'}:\n{lines}{more}\n\n"
+           + res["main"] + "\n\n_זו הערכה – אולי משהו כבר יש בבית. אפשר להוריד מוצרים או להוסיף בהודעה._")
+    n = len(res.get("miss") or []) + len(res.get("rare") or [])
+    send_buttons(to, txt, [("plan_ok", "✅ מאשר"), ("fix", "✏️ לתקן את הסל")] + ([("miss", f"❓ מה חסר ({n})")] if n else [])
+                 + [("oth", "🏪 סופרים אחרים"), ("remind_off", "🔕 בלי תזכורות")])
+    save_users()
+    return True
+
 def send_reminder(to, u):
+    try:
+        if send_plan(to, u): return
+    except Exception as ex:
+        print("plan error", to, ex, flush=True)
     name = u.get("name", "")
     u["step"] = "basket"
     btns = [("mine", "🛒 הסל הקבוע שלי"), ("cam", "📷 צילום קבלה"), ("remind_off", "בלי תזכורות")]
@@ -1445,9 +1500,9 @@ def basic_coverage(min_stores=5, bad_share=0.4):
                 out.append((ch, its[k]["name"].replace(' (לק"ג)', ""), len(Ps), n, [x for x, _ in sim.most_common(3)]))
     return out
 
-def basics_daily():
-    """פעם ביום (אחרי 08:00): התראה לאורי רק על בעיה חדשה – בעיה שכבר דווחה לא נשלחת שוב"""
-    il = _dt.now(IL_TZ); day = il.strftime("%Y-%m-%d")
+def basics_daily(now=None):
+    """פעם ביום (אחרי 08:00): התראה לאורי רק על בעיה חדשה – בעיה שכבר דווחה לא נשלחת שוב. now – לבדיקות (שעה קבועה)"""
+    il = now or _dt.now(IL_TZ); day = il.strftime("%Y-%m-%d")
     if il.hour < 8 or _basics["day"] == day: return
     _basics["day"] = day
     meta = USERS.setdefault("_meta", {}); first = "basics_known" not in meta; known = set(meta.get("basics_known") or [])
@@ -2216,6 +2271,17 @@ def handle(msg):
         return send_buttons(to, parts[-1].rstrip(), [("fix", "✏️ משהו לא נכון")])
     if reply == "fixdone":
         return send_text(to, "מעולה 👍")
+    if reply == "plan_ok":
+        last = u.get("last") or {}
+        if not last.get("store"): return send_text(to, "אין כרגע תוכנית קנייה – כתבו *היי* כדי להתחיל 🙂")
+        if last.get("details"): send_text(to, last["details"])
+        nav = f"\n🧭 ניווט: {last['nav']}" if last.get("nav") else ""
+        return send_text(to, f"סגור 👍 הקנייה ב*{last['store']}*.{nav}\n\n_אחרי הקנייה – צלמו את הקבלה, ואבדוק כמה חסכתם בפועל._")
+    if reply in ("miss", "missall"):
+        if not u.get("last"): return send_text(to, "אין לי עדיין חישוב להציג – כתבו *היי* כדי להתחיל קנייה 🙂")
+        return send_text(to, missing_text(u["last"], every=reply == "missall"))
+    if reply == "oth" and (u.get("last") or {}).get("miss_all"):
+        return send_buttons(to, u["last"]["others"], [("missall", "❓ מה חסר בכל סניף")])
     if reply in ("det", "oth", "spl"):
         txt = (u.get("last") or {}).get({"det": "details", "oth": "others", "spl": "split"}[reply])
         return send_text(to, txt or "אין לי עדיין חישוב להציג – כתבו *היי* כדי להתחיל קנייה 🙂")

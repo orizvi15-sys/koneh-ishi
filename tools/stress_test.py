@@ -157,8 +157,8 @@ def location_round(found):
         nmin = app.car_min(app.km(home, near["p"]))
         m = re.search(r"(\d+) דק' נסיעה ממך", r["main"]); mins = int(m.group(1)) if m else None
         warn = "עדיין אין לי סניפים באזור שלך" in r["main"]
-        miss = re.search(r"חסר בסניף: ([^_]*)_", r["main"])
-        rows.append(f"{city:22} → {r['store']} ({st['a']}) · {mins} דק' · {pn}" + (" · ⚠️ אזהרה" if warn else "") + (f" · חסר: {miss.group(1)}" if miss else ""))
+        miss = ", ".join(r["miss"])                    # 18/10: בהודעה רק מספר החסרים; השמות בכפתור "מה חסר"
+        rows.append(f"{city:22} → {r['store']} ({st['a']}) · {mins} דק' · {pn}" + (" · ⚠️ אזהרה" if warn else "") + (f" · חסר: {miss}" if miss else ""))
         if edge:
             if nmin > 45 and not warn: issue("מיקום קצה – בלי אזהרה", f"{city}: נשלח {mins} דק' ל{r['store']} בלי 'אין סניפים באזור'")
             if nmin > 45 and pn.startswith("אזור "): issue("מיקום קצה – שם אזור מטעה", f"{city}: '{pn}' (הסניף הקרוב {nmin:.0f} דק')")
@@ -166,10 +166,10 @@ def location_round(found):
         if mins is None: issue("מיקום – בלי זמן נסיעה", city)
         elif mins > nmin + 15 and mins > 20: issue("מיקום – נשלח רחוק מדי", f"{city}: {mins} דק' ל{r['store']}; הקרוב {nmin:.0f} דק' ({near['n']})")
         elif mins > 25 and city not in NO_STORE_TOWNS: issue("מיקום – נסיעה ארוכה", f"{city}: {mins} דק' ל{r['store']} ({st['a']})")
-        if miss and st["chain"] not in IL_CHAINS: issue("חסר בסופר המומלץ", f"{city} – {r['store']}: {miss.group(1)}")
-        for blk in r["others"].split("\n\n"):
-            mm = re.search(r"חסר בסניף: ([^_]*)_", blk)
-            if mm and len(mm.group(1).split(", ")) >= app.MAX_MISSING: issue("סניף עם 4+ חסרים מוצג", f"{city}: {blk[:90]}")
+        if miss and st["chain"] not in IL_CHAINS: issue("חסר בסופר המומלץ", f"{city} – {r['store']}: {miss}")
+        for nm, ml in r["miss_all"]:
+            if len(ml) >= app.MAX_MISSING: issue("סניף עם 4+ חסרים מוצג", f"{city}: {nm}: {', '.join(ml)}")
+        if "חסר בסניף:" in r["main"] + r["others"]: issue("רשימת חסרים בהודעה (צריך רק מספר)", city)
     return rows
 
 # ================= 4. קבלות פיקטיביות =================
@@ -351,9 +351,8 @@ def wide_round(n=200):
             if app.car_min(app.km(home, near["p"])) < 12: issue("כל הערים – נשלח רחוק", f"{city}: {mins} דק' ל{best['n'] if best else '?'}")
         if re.search(r"מחיר הסל: ₪0\b", clean): issue("כל הערים – מחיר ₪0", f"{city}: {clean[:120]}")
         if u.get("missed"): issue("כל הערים – שורה מהקבלה לא נמצאה", f"{city}: {u['missed']}")
-        mm = re.search(r"חסר בסניף: ([^\n]*)", clean)
-        if mm and best and best["chain"] not in IL_CHAINS:
-            for x in mm.group(1).split(", "): stats["חסר: " + x[:40]] += 1
+        if best and best["chain"] not in IL_CHAINS:
+            for x in (u.get("last") or {}).get("miss") or []: stats["חסר: " + x[:40]] += 1
         stats["המלצה: נשארים" if "משתלם" in clean else "המלצה: לעבור"] += 1
     return stats
 
