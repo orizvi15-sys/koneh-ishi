@@ -66,6 +66,12 @@ FB_NEUTRAL = {"פרימיום", "ישראלי", "ישראלית", "בקרטון"
               "רגיל", "רגילה", "מובחר", "מובחרת", "סוג", "א", "שקית", "במשקל", "משקל", "תפזורת", "יבש", "L", "M", "XL", "S",
               "לק\"ג", "לקג", "ק\"ג", "קג", "יח'", "יח", "יחידות", "פרימיום", "מגי"}
 FB_NEUTRAL_S = set()
+
+TYPE_HEAD = {stem(w) for w in ("גבינה", "גבינת", "צהובה", "חצי", "קשה")}   # סוג המוצר לפני המותג ("גבינה צהובה … עמק")
+
+def _pcts(s):
+    """אחוזים בשם: "28%" וגם "%28" (ככה כותבים חלק מהרשתות)"""
+    return set(re.findall(r"(\d+(?:\.\d+)?)\s*%", s)) | set(re.findall(r"(?<![\d.])%(\d+(?:\.\d+)?)", s))
 FB_VARIANT = ("בטעם", "טעם", "חמוץ", "חריף", "ממולא", "נוגט", "דיאט", "זירו", "לייט", "ללא", "נטול", "דל ", "מועשר", "אורגני",
               "מאנצ", "שוקולד", "וניל", "תות", "פיקנטי", "מעושן", "קפוא", "עיזים", "מקורמל", "סויה", "שקדים", "שיבולת",
               "פחי", "שויצרי", "גבינה", "לח ", "לילד", "תינוק", "בייבי", "מיני")
@@ -261,7 +267,7 @@ class Data:
             words = [w for w in toks(query or name) if w not in UNIT_WORDS and not re.fullmatch(r"[\d.,*xX]+", w)][:2]
             if words:
                 have = name + " " + (query or "")
-                pct = set(re.findall(r"(\d+(?:\.\d+)?)\s*%", query or name))
+                pct = _pcts(query or name)
                 base = set(self.group(i, query))
                 cands = self.group(i, " ".join(words), n=40, tol=0.25)
                 alt = FB_SYN.get(" ".join(words))
@@ -270,8 +276,27 @@ class Data:
                     if j in base: continue
                     nm = self.items[j][1]
                     if any(f in nm and f not in have for f in FB_VARIANT): continue
-                    if pct and not pct <= set(re.findall(r"(\d+(?:\.\d+)?)\s*%", nm)): continue   # חלב 3% ≠ 1%
+                    if pct and not pct <= _pcts(nm): continue   # חלב 3% ≠ 1%
                     out.append(j)
+                # אותו מוצר כשהמותג בסוף השם: "עמק פרוס 28% 200 גרם" = "גבינה צהובה פרוס בקופסא %28 200 ג' עמק" (סבב שבועי 18/10:
+                # עמק פרוס יצא "חסר" ב-63% מהסניפים). לפני מילות המוצר מותר רק סוג המוצר ("גבינה צהובה") – לא "רוטב"/"סלט"/"ביסקוויט".
+                # כל המילים, אותו גודל (±25%), מחיר רגיל דומה (פי 0.6–1.6).
+                s0, p0 = self.size(i), self.items[i][3]
+                qs = [stem(w) for w in toks(query or name) if w not in SEARCH_UNITS and not re.fullmatch(r"[\d.,*xX]+", w)]
+                if len(qs) >= 2 and s0 and p0:
+                    seen = base | set(out) | {i}
+                    for j in self.search(query or name, 60):
+                        if j in seen or not self.items[j][0][:1].isdigit(): continue
+                        t = self.meta(j)[3]; ts = self.meta(j)[1]
+                        if not all(w in ts or any(x.startswith(w) for x in ts) for w in qs): continue
+                        k = next((n for n, x in enumerate(t) if any(x.startswith(w) for w in qs)), 0)
+                        if not set(t[:k]) <= TYPE_HEAD: continue
+                        s1, p1 = self.size(j), self.items[j][3]
+                        if not s1 or abs(s1 - s0) > 0.25 * s0 or not p1 or not 0.6 * p0 <= p1 <= 1.6 * p0: continue
+                        nm = self.items[j][1]; rest = " ".join(toks(nm)[k:])
+                        if any(f in rest and f not in have for f in FB_VARIANT): continue
+                        if pct and not pct <= _pcts(nm): continue
+                        out.append(j); seen.add(j)
         self._groups[key] = out
         return out
 

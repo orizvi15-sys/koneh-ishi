@@ -853,6 +853,21 @@ def _():
         save = int(re.search(r"חוסכים עוד \*₪(\d+)", r["others"]).group(1)); assert save > app.SPLIT_MIN, save
     assert found, "פיצול לא הופעל באף עיר בסל גדול"
 
+@test("חיפוש באגים שבועי 18/10: מוצר שהמותג בסוף השם ('גבינה צהובה פרוס בקופסא %28 200 ג' עמק') = חלופה ל'עמק פרוס 28%'; בלי רוטב/סלט/משקה")
+def _():
+    assert kdata._pcts("גבינה צהובה פרוס %28 200 ג'") == {"28"} and kdata._pcts("חלב 3% 2 ליטר") == {"3"}
+    D = kdata.D
+    a = next((i for i, it in enumerate(D.items) if it[1].startswith("עמק פרוס 28%") and D.size(i) == 200), None)
+    b = next((i for i, it in enumerate(D.items) if it[1].startswith("גבינה צהובה פרוס בקופסא %28 200")), None)
+    if a is not None and b is not None:
+        assert b in D.fallback(a, "עמק פרוס 28%"), [D.items[j][1] for j in D.fallback(a, "עמק פרוס 28%")]
+    for q in ("סוכר לבן 1ק", "שמנת חמוצה", "תות שדה", "גבינה בולגרית", "שוקולד פרה", "יוגורט דנונה", "עוף טחון"):
+        f, _ = app.match_items([{"name": q, "qty": 1}])
+        for x in f:
+            i = D.code2i[x["code"]]
+            bad = [D.items[j][1] for j in D.fallback(i, q) if re.match(r"(משקה|רוטב|סלט|קונפיטורת|מלית|סירופ|ביסקוויט|מעדן|המבורגר|ערגליות)", D.items[j][1])]
+            assert not bad, (q, bad)
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:
