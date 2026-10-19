@@ -458,12 +458,13 @@ def common_first(name, c):
     """שם כללי קצר ("תירס שימורים", "סבון ידיים"): אם המועמד הראשון נמכר במעט סניפים לעומת מועמד אחר מאותו סוג – הנפוץ קודם.
     (בלי זה נבחר לפעמים מוצר נדיר, והסל יוצא "חסר בסניף" כמעט בכל מקום.)"""
     d = kdata.D; t = kdata.toks(name)
-    if not c or len(t) > 3 or any(ch.isdigit() for ch in name) or not d.items[c[0]][0][:1].isdigit(): return c
+    # גם מוצר בתפזורת (W) נדיר – "עמק" הותאם ל"עמק 28% חריץ (לק"ג)" שנמכר ב-1% מהסניפים (19/10). לא ירקות/בשר מאוחדים (P/M/E)
+    if not c or len(t) > 3 or any(ch.isdigit() for ch in name) or not (d.items[c[0]][0][:1].isdigit() or d.items[c[0]][0][:2] == "W:"): return c
     q = {kdata.stem(w) for w in t}
     q |= {kdata.stem(w) for w in kdata.toks(SEARCH_SYN.get(" ".join(t), ""))}
     first = d.items[c[0]][0][:1]
     def kind(j): return {kdata.stem(w) for w in kdata.toks(d.items[j][1])}
-    same = [j for j in c[:6] if d.items[j][0][:1].isdigit() and len(q & kind(j)) >= min(2, len(q & kind(c[0])))]
+    same = [j for j in c[:6] if (d.items[j][0][:1].isdigit() or d.items[j][0][:2] == "W:") and len(q & kind(j)) >= min(2, len(q & kind(c[0])))]
     if not same: return c
     top = max(same, key=lambda j: d.items[j][2])
     if d.items[c[0]][2] < 0.25 * d.items[top][2]:

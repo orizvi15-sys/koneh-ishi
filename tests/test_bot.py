@@ -968,6 +968,23 @@ def _():
     U.pop("dayb", None); OUT.clear(); app.daybefore_tick(now=sun); assert not texts()               # לא ערב לפני
     assert app.send_deals(to, U, now=mon.timestamp()) is False                                       # לא שתי הודעות באותו ערב
 
+@test("מוצר שנמכר רק בוולט מרקט לא מוצע בחיפוש ('מוצרלה טרייה | דליקטסן' – 19/10); 'קינג סטור וולט' לא בסופרים; נתניה פולג בנתניה")
+def _():
+    D = kdata.D
+    i = D.search("מוצרלה טרייה", 1)[0]
+    old = D._dlv_only
+    try:
+        D._dlv_only = {i}; assert i not in D.search("מוצרלה טרייה", 6)
+    finally:
+        D._dlv_only = old
+    for q in ("מוצרלה טרייה", "עמק", "גרעינים", "חלב", "במבה"):
+        assert not set(D.search(q, 6)) & D.dlv_only(), q
+    assert not any("וולט" in st["n"] for st in D.stores), [st["n"] for st in D.stores if "וולט" in st["n"]][:3]
+    f, _ = app.match_items([{"name": "עמק", "qty": 1}])                       # לא "עמק 28% חריץ (לק"ג)" שנמכר ב-1% מהסניפים
+    assert D.items[D.code2i[f[0]["code"]]][2] > 100, f[0]["name"]
+    pol = next((st for st in D.delivery if st["key"] == "7290058249350-26"), None)
+    if pol: assert pol["p"][0] > 32.2, pol["p"]
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

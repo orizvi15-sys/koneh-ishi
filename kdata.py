@@ -96,7 +96,7 @@ SEARCH_UNITS = {"גר", "גרם", "ג", "ק", "קג", "ק\"ג", "קילו", "ל"
 UNIT_WORDS = {"ק\"ג", "קג", "קילו", "גרם", "גר", "ליטר", "מ\"ל", "מל", "יח", "יחידות", "ארוז", "ארוזה", "פרוס", "פרוסה"}
 
 # סניפים שלא נכנסים להשוואה: שופרסל המפיץ סיטונאות (אשדוד, באר שבע) – חנות לעסקים, בלי חלב/לחם/ביצים (אורי 13/10)
-EXCLUDE_STORES = re.compile(r"המפיץ|סיטונאות")
+EXCLUDE_STORES = re.compile(r"המפיץ|סיטונאות|Test Venue", re.I)
 DELIVERY_STORES = re.compile(r"וולט|wolt", re.I)
 PRICE_FILTER = True
 PRICE_CACHE = 60      # סניפים במטמון (חישוב אחד משתמש בעד 25)   # tools/price_audit.py מכבה כדי לראות את הנתונים הגולמיים
@@ -113,7 +113,7 @@ class Data:
     def __init__(self, items, stores, version, built, blob_reader, source):
         self.items, self.stores, self.version, self.built, self.source = items, stores, version, built, source
         self._blob = blob_reader
-        self.chains = {}; self.qa = {}; self.delivery = []
+        self.chains = {}; self.qa = {}; self.delivery = []; self._dlv_only = None
         self.code2i = {it[0]: i for i, it in enumerate(items)}
         self.name2i = {}
         for i, it in enumerate(items): self.name2i.setdefault(it[1], i)
@@ -255,7 +255,7 @@ class Data:
             out += [self.code2i[c] for c in FB_FAMILY[code][0] if c in self.code2i]
         if code[:1] == "E":                                # ביצים: כל תבנית של 12 (M/L, "ביצי הכפר", "ביצי חופש") – גם בברקוד של רשת
             if not hasattr(self, "_eggs12"):
-                self._eggs12 = [j for j, it in enumerate(self.items) if it[0][:1].isdigit() and re.match(r"ביצ(ים|י) ", it[1])
+                self._eggs12 = [j for j, it in enumerate(self.items) if it[0][:1].isdigit() and re.match(r"(קרטון\s+)?ביצ(ים|י) ", it[1])
                                 and re.search(r"(?<!\d)12(?!\d)", it[1]) and not re.search(r"הפתעה|קינדר|שוקולד|נודלס|אטריות|פסטה|מתוק", it[1])]
             out += [j for j in self._eggs12 if j != i]
         if not code[:1].isdigit():
@@ -385,7 +385,18 @@ class Data:
             if canon:   # בקשה כללית ("במבה") – המוצר הנפוץ ביותר מהסוג הזה
                 sc += 0.5 + 3.0 * it[2] / self.max_avail
             if sc > 0.4: out.append((sc, i))
-        return [i for _, i in sorted(out, reverse=True)[:n]]
+        dl = self.dlv_only()
+        return [i for _, i in sorted(out, reverse=True) if i not in dl][:n]
+
+    def dlv_only(self):
+        """מוצרים שנמכרים רק במחסני משלוחים (וולט מרקט) ולא באף סופר – לא מציעים אותם בחיפוש (19/10: "מוצרלה טרייה" הותאם
+        ל"מוצרלה טרייה | דליקטסן" של וולט, שלא נמכר באף סופר). avail כולל את מחסני המשלוחים, לכן: avail פחות מספר המחסנים ≤ 0."""
+        if self._dlv_only is None:
+            c = defaultdict(int)
+            for st in self.delivery:
+                for i in self.prices(st["blob"], cache=False): c[i] += 1
+            self._dlv_only = {i for i, k in c.items() if self.items[i][2] - k <= 0}
+        return self._dlv_only
 
 
 def _display(chain, name, addr, city):
@@ -422,8 +433,11 @@ def _from_bin(path):
             else: out[i] = p[k] / 100
         return out
 
+    for it in h["items"]:                                     # סימני כיווון בשמות (וולט) – עד שהבנייה תנקה אותם
+        if "\u202b" in it[1] or "\u202c" in it[1] or "\u200f" in it[1]: it[1] = re.sub(r"[\u200e\u200f\u202a-\u202e]", "", it[1]).strip()
     stores, delivery = [], []
-    STORE_FIX = {"7290803800003-7": [31.8605, 34.8225]}   # יוחננוף עקרון – הכתובת "המלך חסן 1" מוקמה בטעות בשדרות
+    STORE_FIX = {"7290803800003-7": [31.8605, 34.8225],   # יוחננוף עקרון – הכתובת "המלך חסן 1" מוקמה בטעות בשדרות
+                 "7290058249350-26": [32.2770, 34.8570]}  # וולט מרקט נתניה פולג – בקובץ העיר "נס ציונה" (19/10)
     for row in h["stores"]:
         key, chain, name, addr, city, lat, lng, blob, ts, prec = row[:10]
         if EXCLUDE_STORES.search(name or ""): continue          # סיטונאות לעסקים – לא בהמלצות (אורי 13/10)
@@ -436,7 +450,8 @@ def _from_bin(path):
         st = {"key": key, "chain": chain, "n": n, "a": a, "p": [lat, lng], "blob": blob, "ts": ts, "prec": prec,
               "cblob": cblob, "pblob": pblob, "mblob": mblob, "cmblob": cmblob}
         # מחסן משלוחים (וולט מרקט) – לא נכנס להשוואה ולהמלצות, רק אופציה נוספת "במשלוח" (אורי 19/10)
-        (delivery if DELIVERY_STORES.search(f"{chain} {name}") else stores).append(st)
+        if DELIVERY_STORES.search(chain or ""): delivery.append(st)
+        elif not DELIVERY_STORES.search(name or ""): stores.append(st)   # "קינג סטור וולט …" – סניף משלוחים של רשת אחרת: לא בכלל (19/10)
     D_ = Data(h["items"], stores, h["v"], h.get("built", ""), reader, "remote")
     D_.delivery = delivery
     D_.chains = h.get("chains", {})
