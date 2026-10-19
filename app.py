@@ -941,8 +941,16 @@ def compute(u):
         full_near = min((r for r in pool if r["miss"] == 0 and r["min"] <= near_ref["min"] + 7), key=lambda r: r["d"], default=None)
         if full_near: near_ref = full_near
     ref = reg or near_ref
-    stay = ref is not None and ref["tot"] - best["tot"] < stay_min
+    def common_gap(a, b):                              # חיסכון רק על מוצרים שיש בשני הסניפים – בלי הערכות לחסרים
+        g = 0.0
+        for it in items:
+            ca, cb = lcr(a, it), lcr(b, it)
+            if ca is not None and cb is not None: g += ca[0] - cb[0]
+        return g
     gap = ref["tot"] - best["tot"] if ref else 0
+    if ref and ref is not best and best["miss"]:       # במנצח חסרים מוצרים: החיסכון חייב להתקיים גם על מה שיש בשניהם (אורי 20/10: חיסכון אמיתי)
+        gap = min(gap, common_gap(ref, best))
+    stay = ref is not None and gap < stay_min
     if stay:                                   # לא שווה לעזוב את הסופר הקבוע / הקרוב
         alt = best; best = ref
         if ref in ranked: ranked.remove(ref)
@@ -987,6 +995,7 @@ def compute(u):
                      f"\n\n*{B['n']}* ({B['a']}):\n" + "\n".join("• " + x for x in split["inB"]))
     shown = inrange[:OTHERS_SHOW] + ([reg] if reg and reg not in inrange[:OTHERS_SHOW] and reg in full else [])
     if s["key"] not in {r["s"]["key"] for r in shown}: shown = [best] + shown[:OTHERS_SHOW - 1]
+    if ref and ref["s"]["key"] not in {r["s"]["key"] for r in shown}: shown.append(ref)   # "חוסך לעומת X" – X תמיד ברשימה
     # פירוט מחירי הסל בסופר המנצח
     det = []
     for it in sorted(items, key=lambda it: -((lcr(best, it) or (med[it["i"]] * it["qty"],))[0])):
@@ -1220,6 +1229,8 @@ def shop_day(u, now=None):
     """היום בשבוע שהמשתמש קונה בו בדרך כלל – לפי תאריכי הקבלות בחודשיים האחרונים (כל יום נספר פעם אחת).
     רק כשזה ברור: לפחות פעמיים באותו יום, ולפחות חצי מימי הקנייה. אחרת None (לא מנחשים מקבלה אחת)."""
     now = now or time.time()
+    sd = (u.get("prefs") or {}).get("shop_day")             # נבחר בהגדרות ("📅 יום הקניות") – גובר על הלמידה (אורי 20/10)
+    if isinstance(sd, int) and 0 <= sd <= 6: return sd
     dates = {_dt.fromtimestamp(t, IL_TZ).date() for t in (u.get("receipts") or [])
              if isinstance(t, (int, float)) and 0 <= now - t < 63 * 86400}
     if len(dates) < 2: return None
@@ -1253,20 +1264,22 @@ def deals_part(u, now=None):
 def send_daybefore(to, u):
     """יום לפני יום הקניות: אם הסל הקבוע זול יותר במקום אחר – הודעה קצרה עם ההמלצה. אם לא – רק "כל הכבוד"."""
     pr = u.get("prefs") or {}
-    L = learned(u)
+    L = learned(u); basis = "הסל הקבוע שלך" if len(u.get("hist") or []) > 1 else "הקנייה האחרונה שלך"
+    if len(L) < 5 and u.get("hist"):                     # עוד מעט קבלות – הקנייה האחרונה היא ההערכה הכי טובה (שקוף: כתוב "לפי הקנייה האחרונה")
+        L = [x for x in (u["hist"][-1].get("items") or []) if x.get("code")]; basis = "הקנייה האחרונה שלך"
     if not pr.get("home") or not L: return None
-    items = [{k: x[k] for k in ("src", "code", "name", "qty")} for x in L]
+    items = [{k: x.get(k, "") for k in ("src", "code", "name", "qty")} for x in L]
     res = compute(dict(u, items=items))
     if not isinstance(res, dict): return None
     if res["stay"] or not res.get("ref"):
         how = "באמת הכי זול באזור" if res["gap"] < 1 else f"משתלם – במקום אחר היית חוסך רק ₪{res['gap']}, לא שווה את הנסיעה"
-        send_text(to, f"✅ בדקתי את הסל הקבוע שלך לקראת מחר – *{res['store']}* {how}.\nכל הכבוד, תמשיך ככה 👏" + deals_part(u))
+        send_text(to, f"✅ בדקתי את {basis} לקראת מחר – *{res['store']}* {how}.\nכל הכבוד, תמשיך ככה 👏" + deals_part(u))
         return "stay"
     u["items"] = items; u["plan"] = int(time.time()); u["step"] = "done"
     u["last"] = {k: res.get(k) for k in LAST_KEYS}
     n = len(res.get("miss") or []) + len(res.get("rare") or [])
     w = res.get("wolt")
-    txt = (f"🛒 *מחר יום קניות?* בדקתי את הסל הקבוע שלך:\n\n"
+    txt = (f"🛒 *מחר יום קניות?* בדקתי את {basis} ({len(items)} מוצרים):\n\n"
            f"💰 ב*{res['store']}*: ₪{res['sum']}" + (f" (חסרים {n})" if n else "") + f"\nבמקום ₪{res['ref_sum']} ב{res['ref']}\n"
            f"✅ *חוסך ₪{res['gap']}* · 🚗 {res['mins']} דק'" + (f"\n🛵 בוולט מרקט: ₪{w['have']} + משלוח" if w else "") + deals_part(u))
     send_buttons(to, txt, [("plan_ok", "✅ נלך לשם"), ("fix", "✏️ לתקן את הסל")] + ([("miss", f"❓ מה חסר ({n})")] if n else [])
@@ -2209,7 +2222,9 @@ SETTINGS = [("set:loc", "📍 מיקום"), ("set:club", "💳 מועדון לק
 
 def notif_buttons(pr):
     on = lambda off: "✅" if not off else "⬜"
-    return [("set:remind", f"{on(pr.get('remind_off'))} הודעה שבועית"), ("set:deals", f"{on(pr.get('deals_off'))} מבצעים")]
+    sd = pr.get("shop_day")
+    return [("set:remind", f"{on(pr.get('remind_off'))} הודעה שבועית"), ("set:deals", f"{on(pr.get('deals_off'))} מבצעים"),
+            ("set:day", f"📅 יום קניות: {HEB_DAYS[sd]}" if isinstance(sd, int) else "📅 יום הקניות שלי")]
 
 def help_text():
     """קצר וברור – גם להורים (אורי 19/10: פחות מלל)"""
@@ -2292,6 +2307,15 @@ def settings_action(to, u, reply):
     if reply == "set:notif":
         return send_buttons(to, "🔔 *הודעות* – לוחצים כדי להדליק או לכבות:\n"
                                 "• *הודעה שבועית* – לפני יום הקניות: איפה הסל הכי משתלם\n• *מבצעים* – מבצע על מוצר שאתה קונה", notif_buttons(pr))
+    if reply == "set:day":
+        return send_buttons(to, "📅 *באיזה יום בדרך כלל קונים?*\nבערב שלפני אבדוק את הסל ואגיד אם יש איפה לחסוך.",
+                            [(f"day:{d}", HEB_DAYS[d]) for d in (6, 0, 1, 2, 3, 4, 5)] + [("day:auto", "🤖 שהבוט ילמד מהקבלות")])
+    if reply.startswith("day:"):
+        v = reply[4:]
+        if v == "auto": pr.pop("shop_day", None); save_users(); return send_buttons(to, "👍 אלמד את יום הקניות מהקבלות", notif_buttons(pr))
+        if not (v.isdigit() and 0 <= int(v) <= 6): return settings_action(to, u, "set:day")
+        pr["shop_day"] = int(v); pr.pop("remind_off", None); save_users()
+        return send_buttons(to, f"📅 רשמתי: יום *{HEB_DAYS[int(v)]}*. בערב שלפני אבדוק את הסל 👍", notif_buttons(pr))
     if reply == "set:more":
         return send_buttons(to, help_text(), [("set:faq", "💬 שאלות ותשובות"), ("set:sav", "💰 כמה חסכתי"), ("set:reset", "🔄 להתחיל מחדש")])
     if reply == "set:sav":
@@ -2404,7 +2428,7 @@ def handle(msg):
     if reply in ("loc_new", "set:loc"):
         u["step"] = "loccheck" if reply == "loc_new" else "setloc"; save_users()
         return send_location_request(to, "📍 לוחצים על *שליחת המיקום שלי* למטה (או 📎 ← מיקום כדי לבחור מקום אחר במפה)")
-    if reply and (reply.startswith("set:") or reply.startswith("st:") or reply in ("reset_yes", "reset_no")):
+    if reply and (reply.startswith(("set:", "st:", "day:")) or reply in ("reset_yes", "reset_no")):
         return settings_action(to, u, reply)
     if text in ("התחל", "מחדש", "/start") or u["step"] == "new":
         if u["step"] == "new" and pr.get("home"):

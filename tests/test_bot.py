@@ -1098,6 +1098,31 @@ def _():
     t = next(x for x in texts() if "💰" in x)
     assert t.count("⚠️") == 1 and "מוצר אחד לא זוהה" in t and "1 מוצרים" not in t, t
 
+@test("יום קניות מההגדרות (אורי 20/10 – אבא קונה ברביעי): ערב שלישי מגיעה בדיקה; עם קבלה אחת – לפי הקנייה האחרונה")
+def _():
+    to = "tg:wed20"; setup_user(to, 31.9290, 34.7980); U = app.USERS[to]                   # נס ציונה
+    OUT.clear(); press(to, "set:notif"); press(to, "set:day"); assert "day:2" in buttons(), buttons()
+    press(to, "day:2"); assert U["prefs"]["shop_day"] == 2 and "רביעי" in last(), last()
+    f, _ = app.match_items([{"name": n, "qty": 1} for n in ("חלב", "לחם אחיד", "ביצים", "קוטג'", "עגבניה", "במבה", "פסטה")])
+    U["hist"] = [{"d": int(time.time()) - 4 * 86400, "saved": 0, "items": [{"code": x["code"], "name": x["name"], "src": x["src"], "qty": 1} for x in f]}]
+    tue = app._dt(2026, 10, 20, 19, 0, tzinfo=app.IL_TZ); mon = app._dt(2026, 10, 19, 19, 0, tzinfo=app.IL_TZ)
+    assert app.is_daybefore(U, tue) and not app.is_daybefore(U, mon)
+    OUT.clear(); U.pop("dayb", None); app.daybefore_tick(now=tue)
+    t = texts()[-1] if texts() else ""
+    assert "הקנייה האחרונה שלך" in t, t                                                    # קבלה אחת – לא "סל קבוע" ריק
+    press(to, "set:notif"); press(to, "set:day"); press(to, "day:auto"); assert "shop_day" not in U["prefs"]
+
+@test("'חוסך לעומת X' – הסניף X תמיד מופיע ב'סופרים אחרים' (רהט 20/10: קינג סטור לא הופיע ברשימה)")
+def _():
+    names = ["חלב", "לחם אחיד", "ביצים", "קוטג'", "פסטה", "אורז", "שמן", "עגבניה", "מלפפון", "בננה", "חזה עוף", "במבה", "נייר טואלט"]
+    f, _ = app.match_items([{"name": n, "qty": 1} for n in names])
+    for home in ([31.3930, 34.7540], [31.9330, 35.0420], [32.0880, 34.8860]):
+        r = app.compute({"step": "done", "prefs": {"home": home, "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "hist": [], "items": [dict(x) for x in f]})
+        m = re.search(r"לעומת (.+?)(?: \(הקרוב אליך\))?$", re.sub(r"<[^>]+>", "", r["main"]).split("\n")[2])
+        if m and r.get("ref"):
+            st = next(s for s in kdata.D.stores if s["n"] == r["ref"])
+            assert app.full_name(st) in r["others"], (r["ref"], r["others"][:300])
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:
