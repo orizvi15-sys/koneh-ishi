@@ -119,11 +119,12 @@ def _():
     assert "מה קונים" in last(), last()
     assert app.USERS[to]["prefs"].get("clubs") == ["רמי לוי"]
 
-@test("משתמש חוזר: היי → אישור מיקום → סל שבועי")
+@test("משתמש חוזר: היי → ישר 'מה קונים' (בלי שאלת מיקום, אורי 20/10) → סל שבועי")
 def _():
     to = "tg:3002"; setup_user(to)
-    send(to, "היי"); assert "loc_ok" in buttons(), buttons()
-    press(to, "loc_ok"); assert "קונים" in last()
+    OUT.clear(); send(to, "היי"); assert "קונים" in last() and "loc_new" in buttons() and "loc_ok" not in buttons(), (last(), buttons())
+    assert "אזור" in last() or "המיקום" in last(), last()                       # האזור בשורה קטנה – לראות שהמיקום נכון
+    press(to, "loc_ok"); assert "קונים" in last()                                 # כפתור ישן – עדיין עובד
     press(to, "weekly"); press(to, "hh34")
     assert any("מחיר הסל" in t for t in texts()), texts()[-2:]
 
@@ -984,6 +985,21 @@ def _():
     assert D.items[D.code2i[f[0]["code"]]][2] > 100, f[0]["name"]
     pol = next((st for st in D.delivery if st["key"] == "7290058249350-26"), None)
     if pol: assert pol["p"][0] > 32.2, pol["p"]
+
+@test("פחות מלל (אורי 20/10): בתוצאה בלי 'זיהיתי N' ובלי '(אזור …)'; הגדרות – 5 כפתורים; הודעות מדליקים/מכבים מתוך 'הודעות'")
+def _():
+    to = "tg:short20"; setup_user(to, 32.0880, 34.8860)
+    OUT.clear(); send(to, "חלב, לחם, ביצים")
+    if app.USERS[to].get("step") == "forgot": press(to, "noadd")
+    t = next(x for x in texts() if "מחיר הסל" in x)
+    assert "זיהיתי" not in t and "(אזור" not in t and "דק' נסיעה ממך" in t, t
+    assert len(t.split("\n")) <= 5, t
+    OUT.clear(); send(to, "הגדרות"); kb = OUT[-1]["reply_markup"]["inline_keyboard"]
+    assert sum(len(r) for r in kb) == 5, kb
+    OUT.clear(); press(to, "set:notif"); assert "set:remind" in buttons() and "set:deals" in buttons()
+    OUT.clear(); press(to, "set:remind"); assert app.USERS[to]["prefs"].get("remind_off") and "⬜ הודעה שבועית" in str(OUT[-1]["reply_markup"])
+    press(to, "set:remind"); assert not app.USERS[to]["prefs"].get("remind_off")
+    OUT.clear(); press(to, "set:more"); assert "איך משתמשים" in last() and "set:faq" in buttons() and "set:reset" in buttons()
 
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])

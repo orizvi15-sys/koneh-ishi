@@ -287,7 +287,8 @@ def chat_round():
             if not main or "יבנה" not in main[-1]: issue("שיחה – מיקום אחרי איפוס", f"{name}: {main[-1][:120] if main else 'אין תוצאה'}")
         if name.startswith("החלפת מיקום"):
             main = [t for t in texts() if "מחיר הסל" in t]
-            if not main or "חיפה" not in main[-1]: issue("שיחה – החלפת מיקום", f"{name}: {main[-1][:120] if main else 'אין תוצאה'}")
+            st_ = next((s for s in D.stores if s["n"] == (app.USERS[to].get("last") or {}).get("store")), None)   # 20/10: בתוצאה כבר אין "(אזור …)"
+            if not main or not st_ or app.km(st_["p"], (32.7940, 34.9896)) > 12: issue("שיחה – החלפת מיקום", f"{name}: {main[-1][:120] if main else 'אין תוצאה'}")
 
 # ================= 6. קבלות בכל הערים (--wide) =================
 # שורות כמו בקבלה אמיתית (קיצורים, משקלים). הקבלה "נלקחת" מסניף אמיתי בכל עיר שיש בה סופרמרקט.

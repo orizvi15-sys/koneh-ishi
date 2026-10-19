@@ -714,7 +714,7 @@ def delivery_option(D, home, items, med, clubs=()):
         c = lc(P, it)
         if c is None: mlist.append(it["name"].replace(' (לק"ג)', "")); tot += med[it["i"]] * it["qty"]
         else: have += c[0]; tot += c[0]
-    if len(mlist) >= MAX_MISSING or len(mlist) * 2 >= len(items): return None
+    if len(mlist) >= MAX_MISSING or len(mlist) * 4 > len(items): return None      # עד רבע מהסל חסר – אחרת זו לא "אותה קנייה"
     return {"s": st, "have": have, "sum": tot, "miss": len(mlist), "mlist": mlist}
 
 def miss_est(r):
@@ -844,9 +844,9 @@ def compute(u):
             L.append(f"✅ חוסך *₪{gap:.0f}* לעומת {ref['s']['n']}" + ("" if reg else " (הקרוב אליך)") + inc)
         elif avg and avg - best["tot"] >= 1:
             L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}*{inc}")
-    L.append(f"{ride} {round(best['min'])} דק' {how} ממך ({place_name(home)})")
+    L.append(f"{ride} {round(best['min'])} דק' {how} ממך")       # בלי "(אזור …)" – האזור מופיע ב"היי" (אורי 20/10: פחות מלל)
     dlv = delivery_option(D, home, items, med, clubs)
-    if dlv: L.append(f"🛵 או במשלוח מ*{dlv['s']['chain']}*: ₪{dlv['have']:.0f}{miss_est(dlv)} + דמי משלוח")
+    if dlv: L.append(f"🛵 או במשלוח מ*{dlv['s']['chain']}*: ₪{dlv['have']:.0f} + דמי משלוח" + (f" _(חסרים {dlv['miss']})_" if dlv["miss"] else ""))
     if rare:                                   # רק כמה – את השמות רואים בכפתור "מה חסר" (אורי 18/10: רשימה ארוכה מבלבלת)
         nr = len(dict.fromkeys(rare))
         L.append("🔎 _" + ("מוצר אחד לא נמצא" if nr == 1 else f"{nr} מוצרים לא נמצאו") + " בסופרים באזור שלך_")
@@ -896,7 +896,7 @@ def welcome(u): return WELCOME.format(name=" " + u["name"] if u.get("name") else
 PROFILE_KEYS = ("home", "mode", "maxMin", "splitMin")
 GREET = re.compile(r"^\W*(הי+|שלום|אהלן|הלו|יו|מה קורה|מה נשמע|מה המצב|מה הולך|מה איתך|בוקר טוב|ערב טוב|צהריים טובים|hi+|hey|hello|start)\b[^,\n]*$", re.I)
 
-def ask(to, step, u, intro=""):
+def ask(to, step, u, intro="", loc_btn=False):
     u["step"] = step
     if step == "loc":
         send_location_request(to, intro + "📍 *מאיפה יוצאים לקניות?*\nלוחצים על הכפתור למטה")
@@ -914,11 +914,11 @@ def ask(to, step, u, intro=""):
     elif step == "split":
         send_buttons(to, "*4️⃣ מוכן לקנות בשני סופרים אם חוסכים?*", [("s0", "כן"), ("s30", "רק אם מעל ₪30"), ("sno", "לא, סופר אחד")])
     elif step == "basket":
-        L = learned(u)
+        L = learned(u); lb = [("loc_new", "📍 ממקום אחר")] if loc_btn else []
         if L:
-            send_buttons(to, intro + f"*ומה קונים הפעם?*\nלמדתי מה אתה קונה בדרך כלל 📈", [("mine", f"🛒 הסל הקבוע שלי"), ("cam", "📷 צילום קבלה"), ("list", "✍️ אכתוב רשימה")])
+            send_buttons(to, intro + "*מה קונים הפעם?*", [("mine", "🛒 הסל הקבוע שלי"), ("cam", "📷 צילום קבלה"), ("list", "✍️ אכתוב רשימה")] + lb)
         else:
-            send_buttons(to, intro + "*ומה קונים?*", [("cam", "📷 צילום קבלה"), ("list", "✍️ אכתוב רשימה"), ("weekly", "🛒 סל שבועי רגיל")])
+            send_buttons(to, intro + "*מה קונים?*", [("cam", "📷 צילום קבלה"), ("list", "✍️ אכתוב רשימה"), ("weekly", "🛒 סל שבועי רגיל")] + lb)
     save_users()
 
 LAST_KEYS = ("details", "others", "split", "store", "ip", "miss", "rare", "miss_all", "nav")
@@ -957,7 +957,7 @@ def finish(to, u, redo=False):
             wk_count("baskets")
             wk_count("missing", [f"{x['name']} @ {res['store']}" for x in u["items"] if (res["ip"].get(x.get("code", "")) or [0, False])[1]])
         n, miss = len(u["items"]), len(u.get("missed") or [])
-        main = res["main"] + f"\n🧾 זיהיתי {n} מוצרים" + (f" ({miss} לא נמצאו)" if miss else "")
+        main = res["main"] + (f"\n⚠️ _{miss} מוצרים לא זוהו – אפשר לכתוב אותם אחרת_" if miss else "")   # בלי "זיהיתי N" (אורי 20/10)
         if u.get("note"): main += "\n\n" + u.pop("note")
         send_buttons(to, main, ([("plan_ok", "✅ מאשר")] if u.get("plan") else []) + result_buttons(res))
     if u.get("plan"):                                     # תיקון של הסל המשוער – תחזית, לא קנייה: לא נכנס להיסטוריה
@@ -2048,10 +2048,13 @@ def place_name(home):
     c = max(set(cities), key=lambda x: (cities.count(x), -cities.index(x))) if cities else ""
     return f"אזור {c}" if c else "המיקום ששמרתי"
 
-SETTINGS = [("set:loc", "📍 עדכון מיקום"), ("set:club", "💳 מועדוני לקוחות"), ("set:store", "⭐ הסופר הקבוע שלי"),
-            ("set:remind", "⏰ תזכורת שבועית"), ("set:deals", "🔥 התראות מבצעים"), ("set:sav", "💰 כמה חסכתי"), ("set:help", "❓ איך משתמשים"),
-            ("set:faq", "💬 שאלות ותשובות"),
-            ("set:reset", "🔄 איפוס מלא")]
+# 5 כפתורים בלבד (אורי 20/10: פשוט להורים). השאר בתוך "הודעות" ו"עזרה ועוד" – כל הכפתורים הישנים עדיין עובדים
+SETTINGS = [("set:loc", "📍 מיקום"), ("set:club", "💳 מועדון לקוחות"), ("set:store", "⭐ הסופר הקבוע"),
+            ("set:notif", "🔔 הודעות"), ("set:more", "❓ עזרה ועוד")]
+
+def notif_buttons(pr):
+    on = lambda off: "✅" if not off else "⬜"
+    return [("set:remind", f"{on(pr.get('remind_off'))} הודעה שבועית"), ("set:deals", f"{on(pr.get('deals_off'))} מבצעים")]
 
 def help_text():
     """קצר וברור – גם להורים (אורי 19/10: פחות מלל)"""
@@ -2122,15 +2125,20 @@ def settings_action(to, u, reply):
     if reply == "set:remind":
         if pr.get("remind_off"):
             pr.pop("remind_off", None); save_users()
-            return send_text(to, "⏰ התזכורת השבועית *הופעלה* – אזכיר לך שבוע אחרי הקנייה 👍")
+            return send_buttons(to, "✅ ההודעה השבועית *הופעלה* 👍", notif_buttons(pr))
         pr["remind_off"] = True; u.pop("remind_at", None); save_users()
-        return send_text(to, "⏰ התזכורת השבועית *כובתה* 👍")
+        return send_buttons(to, "⬜ ההודעה השבועית *כובתה* 👍", notif_buttons(pr))
     if reply == "set:deals":
         if pr.get("deals_off"):
             pr.pop("deals_off", None); save_users()
-            return send_text(to, "🔥 התראות המבצעים *הופעלו* – כשמוצר שאתה קונה בדרך כלל יהיה במבצע לידך, אשלח הודעה 👍")
+            return send_buttons(to, "✅ התראות המבצעים *הופעלו* 👍", notif_buttons(pr))
         pr["deals_off"] = True; save_users()
-        return send_text(to, "🔕 התראות המבצעים *כובו* 👍")
+        return send_buttons(to, "⬜ התראות המבצעים *כובו* 👍", notif_buttons(pr))
+    if reply == "set:notif":
+        return send_buttons(to, "🔔 *הודעות* – לוחצים כדי להדליק או לכבות:\n"
+                                "• *הודעה שבועית* – לפני יום הקניות: איפה הסל הכי משתלם\n• *מבצעים* – מבצע על מוצר שאתה קונה", notif_buttons(pr))
+    if reply == "set:more":
+        return send_buttons(to, help_text(), [("set:faq", "💬 שאלות ותשובות"), ("set:sav", "💰 כמה חסכתי"), ("set:reset", "🔄 להתחיל מחדש")])
     if reply == "set:sav":
         return send_text(to, savings_text(u) or "עוד לא בדקת קניות החודש 🙂")
     if reply == "set:faq":
@@ -2231,10 +2239,8 @@ def handle(msg):
     elif text == M_SET:
         text = "הגדרות"
     if text == M_NEW or (GREET.match(text) and len(text) <= 25) or (text == "/start" and all(k in pr for k in PROFILE_KEYS)):
-        if all(k in pr for k in PROFILE_KEYS):         # משתמש חוזר – רק מוודאים שהמיקום עדיין נכון
-            u["step"] = "loccheck"; save_users()
-            return send_buttons(to, f"היי{' ' + u['name'] if u.get('name') else ''}! 👋\n📍 יוצאים לקניות מ{place_name(pr['home'])}?",
-                                [("loc_ok", "✅ כן"), ("loc_new", "📍 ממקום אחר")])
+        if all(k in pr for k in PROFILE_KEYS):         # משתמש חוזר – ישר "מה קונים"; המיקום רק בשורה קטנה + כפתור (אורי 20/10)
+            return ask(to, "basket", u, intro=f"היי{' ' + u['name'] if u.get('name') else ''}! 👋 _📍 {place_name(pr['home'])}_\n\n", loc_btn=True)
         return ask(to, "loc", u, intro=welcome(u) + "\n\n")
     if text in ("הגדרות", "/settings"):
         return settings_menu(to, u)
