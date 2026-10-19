@@ -108,6 +108,7 @@ def setup_user(to, lat=31.3155, lng=34.6210, clubs=None):
     app.USERS[to] = {"step": "done", "prefs": {"home": [lat, lng], "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": clubs or []}, "hist": []}
 
 app.USERS.clear(); app.USERS["_meta"] = {"admins": [ADMIN]}
+app.ASK_UNSURE = False      # "התכוונת ל…?" נבדק בבדיקה משלו; בשאר הבדיקות – זרימה ישירה
 
 # ================= הבדיקות =================
 @test("משתמש חדש: היי → מיקום → מועדון → מוכן לקנות")
@@ -880,7 +881,8 @@ def _():
     assert "חסר בסניף:" not in main and "חסר בסניף:" not in last["others"], (main, last["others"][:400])
     n = len(last["miss"]) + len(last["rare"])
     assert n, "בסל הזה תמיד חסר משהו"
-    assert f"מה חסר ({n})" in str(OUT[-1].get("reply_markup")), OUT[-1].get("reply_markup")
+    assert "more" in str(OUT[-1].get("reply_markup")), OUT[-1].get("reply_markup")              # 20/10: בתוך "פרטים"
+    OUT.clear(); press(to, "more"); assert f"מה חסר ({n})" in str(OUT[-1].get("reply_markup")), OUT[-1].get("reply_markup")
     OUT.clear(); press(to, "miss"); t = html.unescape(texts()[-1])
     for x in last["miss"] + last["rare"]: assert x in t, (x, t)
     if last["miss_all"]:
@@ -1122,6 +1124,43 @@ def _():
         if m and r.get("ref"):
             st = next(s for s in kdata.D.stores if s["n"] == r["ref"])
             assert app.full_name(st) in r["others"], (r["ref"], r["others"][:300])
+
+@test("אורי 20/10: בתוצאה רק 'נלך לשם' + 'פרטים'; 'התכוונת ל…?' רק כשבאמת לא ברור, ונזכר; אחרי 'נלך לשם' הקבלה מראה חיסכון אמיתי")
+def _():
+    D = kdata.D; to = "tg:agent20"; setup_user(to, 32.0880, 34.8860); U = app.USERS[to]
+    OUT.clear(); send(to, "חלב, לחם אחיד, ביצים")
+    if U.get("step") == "forgot": press(to, "noadd")
+    kb = str(next(o for o in OUT if "💰" in o.get("text", "")).get("reply_markup")); assert "plan_ok" in kb and "more" in kb and "seen" not in kb, kb
+    OUT.clear(); press(to, "more"); b = buttons(); assert "seen" in b and "oth" in b and "fix" in b, b
+    # "התכוונת ל…?" – פריט לא ודאי (שתי אפשרויות נפוצות, מחיר שונה פי 3+)
+    app.ASK_UNSURE = True
+    try:
+        f, _ = app.match_items([{"name": "טונה", "qty": 1}])
+        x = dict(f[0]); x.pop("sure", None)
+        if app.unsure_item(x):
+            U["items"] = []; U["step"] = "done"; orig = app.match_items
+            app.match_items = lambda its, u=None: ([dict(x)], [])
+            try: OUT.clear(); send(to, "טונה")
+            finally: app.match_items = orig
+            assert "למה התכוונת" in last() and "cl:any" in buttons(), last()
+            OUT.clear(); press(to, "cl:1"); assert any("💰" in t for t in texts()), texts()[-1:]
+            assert U["my_match"].get(app.mkey("טונה")) and U["items"][0].get("sure")
+        for nm in ("חלב", "לחם אחיד", "ביצים", "במבה", "עגבניה"):                      # מוצרים רגילים – בלי שאלה
+            f, _ = app.match_items([{"name": nm, "qty": 1}]); assert not app.unsure_item(f[0]), nm
+    finally:
+        app.ASK_UNSURE = False
+    # חיסכון אמיתי: "נלך לשם" → קבלה מאותו סופר → "חסכת באמת"
+    names = ["חלב", "לחם אחיד", "ביצים", "קוטג'", "פסטה", "אורז", "שמן", "במבה"]
+    f, _ = app.match_items([{"name": n, "qty": 1} for n in names])
+    st = next(s for s in D.stores if s["chain"] == "רמי לוי"); ref = next(s for s in D.stores if s["chain"] == "שופרסל" and "שלי" in s["n"])
+    U["went"] = {"store": st["key"], "ref": ref["key"], "t": int(time.time())}
+    P = D.store_prices(st, ()); Pr = D.store_prices(ref, ())
+    U["items"] = [dict(x, paid=round(P[D.code2i[x["code"]]], 2)) for x in f if D.code2i[x["code"]] in P]
+    OUT.clear(); real = app.verify_saving(to, U, st["key"])
+    assert real is not None and ("חסכת באמת" in last() or "לא נחסך" in last()), last()
+    assert "went" not in U and U["real"][-1]["n"] >= 3
+    U["went"] = {"store": st["key"], "ref": ref["key"], "t": int(time.time())}
+    assert app.verify_saving(to, U, ref["key"]) is None and "went" in U               # קבלה מסופר אחר – לא בודקים
 
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
