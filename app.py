@@ -652,6 +652,14 @@ def lc(P, it):
                     if c2 < c - 0.009: c, txt = c2, f"{k} ב־₪{money(bundle)}"
             if best is None or c < best[0]: best = (c, txt, kdata.D.items[g][1] if sub else None)
         if best: return best
+    pk = it.get("pk")                                  # ירק/פרי שבסניף נמכר רק ארוז → מספר מארזים לפי המשקל (אורי 20/10)
+    if pk:
+        best = None
+        for j, kg in pk:
+            if j not in P: continue
+            n = 1 if kg is None else max(1, round(it["qty"] / kg)); c = P[j] * (it["qty"] if kg is None else n)
+            if best is None or c < best[0]: best = (c, None, kdata.D.items[j][1] + (f" ×{n}" if n > 1 else ""))
+        if best: return best
     fz = it.get("frz")                                 # אחרון-אחרון: אין טרי בכלל → אותו נתח קפוא (החלטה של אורי 12/10)
     if fz:
         best = None
@@ -698,6 +706,65 @@ def frozen_alts(i):
     _frz["c"][i] = out
     return out
 
+# ---------- ירק/פרי במשקל שבסניף נמכר רק ארוז (עגבניות שרי במארז 460 גרם) – אורי 20/10: "חסר עגבניות שרי" בחצי משופרסל ----------
+PACK_SKIP = re.compile(r"מיובש|קצוצ|מרוסק|שימורים|כבוש|ממרח|רוטב|ברוטב|בשמן|רסק|מחית|משקה|מיץ|צ.יפס|קפוא|פיצה|סלט|חטיף|מטוגן|אפוי|"
+                       r"מבושל|ממולא|קלוי|בחומץ|במלח|יבש|אורגני|MUTTI|מוטי|נקטר|ריבה|שוקולד|מצופ|בטעם|מקולפ|עיסיס|איסיס|%|^ר\.|קצו[צץ]|מיקרו|מיונז|מוחמצ|מוקפא|חתו[כך]|שטוף|מגורר|פרוס|עלים|מנגולד|ו?ואקום|בייבי|ליטר|מ\"?ל|\d\s*ל(?![א-ת])")
+_pk = {"v": None, "c": {}}
+
+def _pack_g(name):
+    """גודל המארז בגרמים: "460 גרם", "1 ק"ג", או מספר בסוף השם ("שרי מיקס 440")"""
+    g = kdata.parse_size(name)
+    if g: return g
+    m = re.search(r"(\d+(?:\.\d+)?)\s*ק(?![א-ת])", name)
+    if m and float(m.group(1)) <= 5: return float(m.group(1)) * 1000
+    m = re.search(r"(?<![\d.])(\d{3,4})(?![\d.])", name)
+    return float(m.group(1)) if m and 150 <= float(m.group(1)) <= 2500 else None
+
+def packed_alts(i):
+    """[(אינדקס, ק"ג במארז)] – אותו ירק/פרי ארוז, כשבסניף אין אותו במשקל. רק ירקות ופירות מאוחדים (P).
+    מארז בלי גודל בשם – הגודל הנפוץ של אותו מוצר (לפי המארזים שכן כתוב בהם). מחיר לק"ג סביר (פי 0.4–2.5 מהמשקל)."""
+    D = kdata.D; code = D.items[i][0]
+    if code[:1] != "P": return []
+    if _pk["v"] != D.version: _pk.clear(); _pk.update(v=D.version, c={})
+    if i in _pk["c"]: return _pk["c"][i]
+    neutral = {kdata.stem(w) for w in kdata.FB_NEUTRAL}
+    core = [kdata.stem(w).rstrip("י") for w in kdata.toks(D.items[i][1].replace('(לק"ג)', "")) if kdata.stem(w) not in neutral and not w[:1].isdigit()]
+    out = []
+    if core:
+        first = core[0]
+        # זנים: מילה שהיא חלק מהשם של ירק/פרי מאוחד אחר מאותו סוג ("שרי" ל"עגבנייה") – אינה אותו מוצר
+        if "fw" not in _pk:                              # לכל סוג (מילה ראשונה) – כל המילים בשמות של הירקות/הפירות המאוחדים שלו
+            fw = collections.defaultdict(set)
+            for j in D._unified():
+                if D.items[j][0][:1] != "P": continue
+                st_ = [kdata.stem(w).rstrip("י") for w in kdata.toks(D.items[j][1].replace('(לק"ג)', "")) if not w[:1].isdigit()]
+                if st_: fw[st_[0]].update(st_)
+            _pk["fw"] = fw
+        other = _pk["fw"].get(first, set()) - set(core) - neutral
+        cand = []
+        for j in D.search(" ".join(kdata.toks(D.items[i][1].replace('(לק"ג)', ""))), 80):
+            it = D.items[j]
+            if not it[0][:1].isdigit() or it[2] < 5 or PACK_SKIP.search(it[1]): continue
+            st = [kdata.stem(w).rstrip("י") for w in kdata.toks(it[1])]
+            if not st or st[0] != first or not all(any(x.startswith(w) for x in st) for w in core): continue
+            if set(st) & other: continue
+            if re.search(r"\(ק\)|לק\"?ג|ק\"ג\)", it[1]) and not kdata.parse_size(it[1]):   # "(ק)" – מחיר לק"ג בברקוד של הרשת
+                cand.append((j, -1)); continue
+            cand.append((j, _pack_g(it[1])))
+        known = sorted(g for _, g in cand if g and g > 0)
+        dflt = known[len(known) // 2] if known else None
+        p0 = D.items[i][3] / 100
+        for j, g in cand:
+            if g == -1:                                   # במשקל – מחיר לק"ג
+                if p0 and 0.4 * p0 <= D.items[j][3] / 100 <= 2.5 * p0: out.append((j, None))
+                continue
+            g = g or dflt
+            if not g or not p0: continue
+            per = D.items[j][3] / 100 / (g / 1000)
+            if 0.4 * p0 <= per <= 2.5 * p0: out.append((j, g / 1000))
+    _pk["c"][i] = out
+    return out
+
 OTHERS_SHOW = 6          # "סופרים אחרים": עד 6 סניפים, שתי שורות לכל אחד (אורי 19/10: פחות מלל)
 
 # ---------- וולט מרקט: אותה קנייה במשלוח (אורי 19/10) ----------
@@ -717,11 +784,18 @@ def delivery_option(D, home, items, med, clubs=()):
     if len(mlist) >= MAX_MISSING or len(mlist) * 4 > len(items): return None      # עד רבע מהסל חסר – אחרת זו לא "אותה קנייה"
     return {"s": st, "have": have, "sum": tot, "miss": len(mlist), "mlist": mlist}
 
+def basket_price(r, short=False):
+    """מחיר כל הסל בסניף – כולל המוצרים שחסרים בו (לפי המחיר באזור), כדי שההשוואה תהיה הוגנת: אותו סל בדיוק בכל סניף.
+    (אורי 20/10: "סל שאבא קנה ב-670 עולה במקום אחר 450 כי חסר דברים" – המחיר בלי החסרים הטעה. ובלי הסימן ~)"""
+    if not r.get("miss"): return f"₪{r['have']:.0f}"
+    n = len(r.get("mlist") or []) or r["miss"]          # מוצרים שונים (שורה כפולה בקבלה = מוצר אחד, כמו ב"מה חסר")
+    return f"₪{r['sum']:.0f}" + (f" (חסרים {n})" if short else f" _(כולל {'מוצר אחד שחסר' if n == 1 else f'{n} שחסרים'} שם – לפי המחיר באזור)_")
+
 def miss_est(r):
-    """הערכה למוצרים שחסרים בסניף (לפי המחיר באזור) – כדי שההפרש מול הקבלה יהיה ברור (למשל ₪966 + ~₪80 על 3 חסרים)"""
+    """(ישן – נשאר לתאימות) הערכה למוצרים שחסרים בסניף"""
     if not r.get("miss"): return ""
     est = r["sum"] - r["have"]
-    return f" + ~₪{est:.0f} על {'מוצר אחד שחסר' if r['miss'] == 1 else str(r['miss']) + ' שחסרים'}"
+    return f" + ₪{est:.0f} על {'מוצר אחד שחסר' if r['miss'] == 1 else str(r['miss']) + ' שחסרים'}"
 
 def compute(u):
     D = kdata.D
@@ -741,7 +815,7 @@ def compute(u):
             g = [i] if mine else D.group(i, q)
             wf = None if mine or not D.items[i][0][:1].isdigit() else weighed_fb(D.items[i][1])
             if wf: wf = (D.code2i[wf[0]], wf[1]) if wf[0] in D.code2i else None
-            items.append(dict(it, i=i, g=g, fb=[] if mine else D.fallback(i, q), wfb=wf, frz=[] if mine else frozen_alts(i)))
+            items.append(dict(it, i=i, g=g, fb=[] if mine else D.fallback(i, q), wfb=wf, frz=[] if mine else frozen_alts(i), pk=[] if mine else packed_alts(i)))
     if not items:
         return ["לא מצאתי אף אחד מהמוצרים במאגר המחירים העדכני 🙁 נסה לכתוב אותם שוב."]
     near = sorted(((km(home, s["p"]), s) for s in D.stores), key=lambda x: x[0])
@@ -759,7 +833,7 @@ def compute(u):
     med = {}
     for it in items:
         v = sorted(x for x in (gp(r["P"], it) for r in rows) if x is not None)
-        med[it["i"]] = v[len(v) // 2] if v else D.items[it["i"]][3] / 100
+        med[it["i"]] = v[min(len(v) - 1, 3 * len(v) // 4)] if v else D.items[it["i"]][3] / 100   # רבעון עליון: סניף עם חסרים לא "מנצח" בזכותם
     def stats():
         for r in rows:
             tot = 0; miss = 0; mlist = []; have = 0
@@ -833,12 +907,12 @@ def compute(u):
     ride = "🚗" if car else ("🚌" if bus else "🚶")
     if stay:
         L.append((f"👍 הסופר הקבוע שלך משתלם: *{s['n']}*" if reg else f"👍 הסופר הקרוב אליך משתלם: *{s['n']}*") + kosher_tag(s))
-        L.append(f"💰 מחיר הסל: *₪{best['have']:.0f}*" + miss_est(best) + (" (במחירי מועדון)" if best.get("club") else "")
+        L.append(f"💰 מחיר הסל: *{basket_price(best)}*" + (" (במחירי מועדון)" if best.get("club") else "")
                  )
         L.append(f"✅ זה הכי זול באזור 🏆" if gap < 1 else f"✅ במקום אחר היית חוסך רק ₪{gap:.0f}{inc} – לא שווה את הטרחה")
     else:
         L.append(f"🏆 הסופר המנצח: *{s['n']}*" + kosher_tag(s))
-        L.append(f"💰 מחיר הסל: *₪{best['have']:.0f}*" + miss_est(best) + (" (במחירי מועדון)" if best.get("club") else "")
+        L.append(f"💰 מחיר הסל: *{basket_price(best)}*" + (" (במחירי מועדון)" if best.get("club") else "")
                  )
         if ref:
             L.append(f"✅ חוסך *₪{gap:.0f}* לעומת {ref['s']['n']}" + ("" if reg else " (הקרוב אליך)") + inc)
@@ -846,7 +920,7 @@ def compute(u):
             L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}*{inc}")
     L.append(f"{ride} {round(best['min'])} דק' {how} ממך")       # בלי "(אזור …)" – האזור מופיע ב"היי" (אורי 20/10: פחות מלל)
     dlv = delivery_option(D, home, items, med, clubs)
-    if dlv: L.append(f"🛵 או במשלוח מ*{dlv['s']['chain']}*: ₪{dlv['have']:.0f} + דמי משלוח" + (f" _(חסרים {dlv['miss']})_" if dlv["miss"] else ""))
+    if dlv: L.append(f"🛵 או במשלוח מ*{dlv['s']['chain']}*: {basket_price(dlv, short=True)} + דמי משלוח")
     if rare:                                   # רק כמה – את השמות רואים בכפתור "מה חסר" (אורי 18/10: רשימה ארוכה מבלבלת)
         nr = len(dict.fromkeys(rare))
         L.append("🔎 _" + ("מוצר אחד לא נמצא" if nr == 1 else f"{nr} מוצרים לא נמצאו") + " בסופרים באזור שלך_")
@@ -864,7 +938,7 @@ def compute(u):
         q = f" ×{it['qty']:g}" if it["qty"] != 1 else ""
         det.append(f"• {it['name']}{q} – " + (f"₪{c[0]:.2f}" + (f" 🔥 _מבצע {c[1]}_" if c[1] else "")
                                                + (f" _(אין בסניף – במקום: {c[2]})_" if c[2] else "") if c is not None
-                                               else f"~₪{med[it['i']] * it['qty']:.2f} _(חסר בסניף)_"))
+                                               else f"₪{med[it['i']] * it['qty']:.2f} _(חסר בסניף – מחיר באזור)_"))
     if rare: det.append("\n_לא מצאתי בסופרים באזור שלך (לא נכלל בהשוואה): " + ", ".join(dict.fromkeys(rare)) + "_")
     if gone: det.append("\n_לא נמצאו במאגר: " + ", ".join(gone) + "_")
     fresh = f"\n\n_מחירים ומבצעים מעודכנים ל-{D.built[8:10]}/{D.built[5:7]} {D.built[11:16]}_" if len(D.built) >= 16 else ""
@@ -877,17 +951,17 @@ def compute(u):
             "nav": f"https://waze.com/ul?ll={s['p'][0]},{s['p'][1]}&navigate=yes",
             "details": f"📋 *הסל שלך ב{s['n']}:*\n" + "\n".join(det) + fresh,
             "others": ((f"💡 אם מתחלקים בין *{split['A']['s']['n']}* ל*{split['B']['s']['n']}* חוסכים עוד *₪{best['tot'] - split['tot']:.0f}*"
-                        + (f" – כל הסל ב-₪{split['tot']:.0f}, לעומת ~₪{best['tot']:.0f} כולל מה שחסר ב{s['n']}" if best["miss"] else "") + "\n\n")
+                        + (f" – כל הסל ב-₪{split['tot']:.0f}, לעומת ₪{best['tot']:.0f} כולל מה שחסר ב{s['n']}" if best["miss"] else "") + "\n\n")
                        if split_txt else "")
                       + "🏪 *סופרים באזור:*\n\n" + "\n\n".join(
                 f"{'🏆' if r['s']['key'] == s['key'] else '▫️'} *{full_name(r['s'])}*" + (" ✡️" if is_kosher(r["s"]) else "")
                 + (" ⭐ _הקבוע שלך_" if r is reg else "") +
-                f"\n      💰 ₪{r['have']:.0f}{miss_est(r)} · {ride} {round(r['min'])} דק'"
+                f"\n      💰 {basket_price(r, short=True)} · {ride} {round(r['min'])} דק'"
                 for r in shown) + fresh,
             "split": split_txt, "miss": list(best["mlist"]), "rare": list(dict.fromkeys(rare)),
             "miss_all": [(full_name(r["s"]), list(r["mlist"])) for r in shown if r["miss"]],
             "stay": stay, "gap": round(gap), "ref": ref["s"]["n"] if ref else None, "ref_have": round(ref["have"]) if ref else None,
-            "have": round(best["have"]), "mins": round(best["min"]), "kosher": is_kosher(s),
+            "have": round(best["have"]), "sum": round(best["sum"]), "ref_sum": round(ref["sum"]) if ref else None, "mins": round(best["min"]), "kosher": is_kosher(s),
             "wolt": {"chain": dlv["s"]["chain"], "have": round(dlv["have"]), "miss": dlv["miss"]} if dlv else None}
 
 # ---------- שיחה ----------
@@ -1071,7 +1145,7 @@ def send_plan(to, u):
     more = f" ועוד {len(L) - PLAN_SHOW}" if len(L) > PLAN_SHOW else ""
     txt = (f"היי{' ' + name if name else ''} 👋 הכנתי לך את הקנייה של השבוע 🛒\n"
            f"*הסל הרגיל שלך ({len(L)} מוצרים):* {lines}{more}\n\n"
-           + res["main"] + "\n\n_אם משהו כבר יש בבית – ✏️ לתקן._")
+           + res["main"] + deals_part(u) + "\n\n_אם משהו כבר יש בבית – ✏️ לתקן._")
     n = len(res.get("miss") or []) + len(res.get("rare") or [])
     send_buttons(to, txt, [("plan_ok", "✅ מאשר"), ("fix", "✏️ לתקן את הסל")] + ([("miss", f"❓ מה חסר ({n})")] if n else [])
                  + [("oth", "🏪 סופרים אחרים"), ("remind_off", "🔕 בלי תזכורות")] + ([(WOLT_URL, "🛵 להזמין בוולט")] if res.get("wolt") else []))
@@ -1097,6 +1171,25 @@ def is_daybefore(u, il):
     sd = shop_day(u, il.timestamp())
     return sd is not None and (il.weekday() + 1) % 7 == sd
 
+DEALS_IN_WEEKLY = 2
+
+def deals_part(u, now=None):
+    """סעיף 5 (אורי 20/10): המבצעים בתוך ההודעה השבועית – הודעה אחת בשבוע במקום שתיים. מסמן אותם כנשלחו, ולא שולח
+    הודעת מבצעים נפרדת ב-3 הימים הקרובים."""
+    now = now or time.time()
+    pr = u.get("prefs") or {}
+    u["deal_last"] = now
+    if pr.get("deals_off"): return ""
+    try:
+        sent = {k: t for k, t in (u.get("deal_sent") or {}).items() if now - t < 7 * 86400}
+        deals = [d for d in find_deals(u) if d[2] not in sent][:DEALS_IN_WEEKLY]
+    except Exception as ex:
+        print("deals in weekly error", ex, flush=True); return ""
+    if not deals: return ""
+    for d in deals: sent[d[2]] = now
+    u["deal_sent"] = sent
+    return "\n\n🔥 *וגם במבצע השבוע:*\n" + "\n".join(d[1] for d in deals)
+
 def send_daybefore(to, u):
     """יום לפני יום הקניות: אם הסל הקבוע זול יותר במקום אחר – הודעה קצרה עם ההמלצה. אם לא – רק "כל הכבוד"."""
     pr = u.get("prefs") or {}
@@ -1107,15 +1200,15 @@ def send_daybefore(to, u):
     if not isinstance(res, dict): return None
     if res["stay"] or not res.get("ref"):
         how = "באמת הכי זול באזור" if res["gap"] < 1 else f"משתלם – במקום אחר היית חוסך רק ₪{res['gap']}, לא שווה את הנסיעה"
-        send_text(to, f"✅ בדקתי את הסל הקבוע שלך לקראת מחר – *{res['store']}* {how}.\nכל הכבוד, תמשיך ככה 👏")
+        send_text(to, f"✅ בדקתי את הסל הקבוע שלך לקראת מחר – *{res['store']}* {how}.\nכל הכבוד, תמשיך ככה 👏" + deals_part(u))
         return "stay"
     u["items"] = items; u["plan"] = int(time.time()); u["step"] = "done"
     u["last"] = {k: res.get(k) for k in LAST_KEYS}
     n = len(res.get("miss") or []) + len(res.get("rare") or [])
     w = res.get("wolt")
     txt = (f"🛒 *מחר יום קניות?* בדקתי את הסל הקבוע שלך:\n\n"
-           f"💰 ב*{res['store']}*: ₪{res['have']}" + (f" (חסרים {n})" if n else "") + f"\nבמקום ₪{res['ref_have']} ב{res['ref']}\n"
-           f"✅ *חוסך ₪{res['gap']}* · 🚗 {res['mins']} דק'" + (f"\n🛵 בוולט מרקט: ₪{w['have']} + משלוח" if w else ""))
+           f"💰 ב*{res['store']}*: ₪{res['sum']}" + (f" (חסרים {n})" if n else "") + f"\nבמקום ₪{res['ref_sum']} ב{res['ref']}\n"
+           f"✅ *חוסך ₪{res['gap']}* · 🚗 {res['mins']} דק'" + (f"\n🛵 בוולט מרקט: ₪{w['have']} + משלוח" if w else "") + deals_part(u))
     send_buttons(to, txt, [("plan_ok", "✅ נלך לשם"), ("fix", "✏️ לתקן את הסל")] + ([("miss", f"❓ מה חסר ({n})")] if n else [])
                  + [("remind_off", "🔕 בלי הודעות")])
     u["remind_miss"] = u.get("remind_miss", 0) + 1; save_users()
@@ -1559,7 +1652,7 @@ def basic_coverage(min_stores=5, bad_share=0.4):
     its = []
     for c in BASIC_WATCH:
         i = D.code2i.get(c)
-        if i is not None: its.append({"name": D.items[i][1], "qty": 1, "i": i, "g": [i], "fb": D.fallback(i), "wfb": None, "frz": frozen_alts(i)})
+        if i is not None: its.append({"name": D.items[i][1], "qty": 1, "i": i, "g": [i], "fb": D.fallback(i), "wfb": None, "frz": frozen_alts(i), "pk": packed_alts(i)})
     by = {}
     for st in D.stores:
         if st["chain"] in ("יילו", "דור אלון", "סופר יודה") or re.search(r"\bBE\b|Be\b|אקספרס|AM|PM", st["n"]): continue

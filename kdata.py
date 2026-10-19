@@ -13,12 +13,13 @@ REFRESH_HOURS = float(os.environ.get("DATA_REFRESH_HOURS", "0.5"))
 
 
 def toks(s):
+    s = re.sub(r"(\d)\s*[xX×]\s*(\d)", r"\1 \2", s)          # "160x4" = 160 ו-4 (כמו "4*160") – רביעייה, לא פחית בודדת
     s = re.sub(r"[׳'\"`.\-–_/()*%,+\[\]{}]", " ", s)
     s = re.sub(r"(\d)([א-ת])|([א-ת])(\d)", r"\1\3 \2\4", s)
     return [w for w in s.split() if len(w) > 1 or w.isdigit()]
 
 
-SIZE_RX = re.compile(r'(\d+(?:\.\d+)?)\s*(ק"?ג|קילו|גרם|גר|ג\'?|מ"?ל|ליטר|ל\'?)(?![א-ת])')
+SIZE_RX = re.compile(r'(\d+(?:\.\d+)?)\s*(ק(?:"|\'\'|\'|״)?ג|קג|קילו|גרם|גר|ג\'?|מ"?ל|ליטר|ל\'?)(?![א-ת])')   # גם ק\'\'ג (אריאל 4.5 ק\'\'ג)
 
 
 def parse_size(name):
@@ -97,6 +98,7 @@ UNIT_WORDS = {"ק\"ג", "קג", "קילו", "גרם", "גר", "ליטר", "מ\"�
 
 # סניפים שלא נכנסים להשוואה: שופרסל המפיץ סיטונאות (אשדוד, באר שבע) – חנות לעסקים, בלי חלב/לחם/ביצים (אורי 13/10)
 EXCLUDE_STORES = re.compile(r"המפיץ|סיטונאות|Test Venue", re.I)
+MULTI_WORD = {"2": "זוג", "3": "שלישי", "4": "רביעי", "6": "שישי", "8": "שמיני"}
 DELIVERY_STORES = re.compile(r"וולט|wolt", re.I)
 PRICE_FILTER = True
 PRICE_CACHE = 60      # סניפים במטמון (חישוב אחד משתמש בעד 25)   # tools/price_audit.py מכבה כדי לראות את הנתונים הגולמיים
@@ -371,6 +373,13 @@ class Data:
                         if i not in hit: hit[i] = 1
             for i, s in hit.items(): score[i] += s
         out = []
+        # מארז: "טונה במים 4*160" – רביעייה, לא פחית בודדת (19/10: הותאם ל"טונה 160 גרם" אחת)
+        mp = re.search(r"(\d+)\s*[*xX×]\s*(\d+)", name)
+        qsize = None if mp else parse_size(name)            # "חלב 3% 2 ליטר", "במבה 80ג" – הגודל שנכתב קובע (20/10)
+        if mp:
+            a_, b_ = mp.group(1), mp.group(2); cnt = min(a_, b_, key=lambda v: float(v))
+            word = MULTI_WORD.get(cnt)
+            mprx = re.compile(rf"(?<!\d){a_}\s*[*xX×]\s*{b_}(?!\d)|(?<!\d){b_}\s*[*xX×]\s*{a_}(?!\d)" + (f"|{word}" if word else ""))
         for i, s in score.items():
             it = self.items[i]
             if it[0][:1] in "PEM" and len(q) <= 3: s += 1     # ירקות/ביצים/בשר מאוחדים – "המוצר הבסיסי"; W (תפזורת) בלי בונוס
@@ -382,6 +391,10 @@ class Data:
                 canon = all(w in self.itoks[i] or (sw in st and it[0][:1] in "PEM") for w, sw in zip(q, qs))
             full = len(q) <= 2 and not nums and f0 == q0 and all(w in self.itoks[i] or sw in st for w, sw in zip(q, qs))
             sc = s / (len(q) + 0.3 * len(self.itoks[i])) + (0.9 if full else 0.35) * it[2] / self.max_avail   # בקשה כללית קצרה שכל מילותיה במוצר → המוצר שנמכר בהכי הרבה סניפים
+            if mp: sc += 0.6 if mprx.search(it[1]) else -0.2
+            if qsize:
+                s1 = self.size(i)
+                if s1: sc += 0.5 if abs(s1 - qsize) <= 0.1 * qsize else -0.15
             if canon:   # בקשה כללית ("במבה") – המוצר הנפוץ ביותר מהסוג הזה
                 sc += 0.5 + 3.0 * it[2] / self.max_avail
             if sc > 0.4: out.append((sc, i))

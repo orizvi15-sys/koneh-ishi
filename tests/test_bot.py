@@ -491,19 +491,20 @@ def _():
     blk = next(b for b in r["others"].split("\n\n") if "בן צבי" in b)
     assert "בשר בקר טחון" not in blk, blk
 
-@test("מחיר הסל מציג גם הערכה לחסרים ('₪X + ~₪Y על N שחסרים') – בקשה 12/10")
+@test("מחיר הסל = כל הסל, כולל החסרים לפי המחיר באזור ('₪1046 (כולל 3 שחסרים שם)'), בלי ~ – 12/10, אורי 20/10")
 def _():
     r = {"miss": 3, "sum": 1046.4, "have": 966.2}
-    assert app.miss_est(r) == " + ~₪80 על 3 שחסרים", app.miss_est(r)
-    assert app.miss_est({"miss": 1, "sum": 30, "have": 20}) == " + ~₪10 על מוצר אחד שחסר"
-    assert app.miss_est({"miss": 0, "sum": 5, "have": 5}) == ""
+    assert app.basket_price(r).startswith("₪1046") and "3 שחסרים" in app.basket_price(r), app.basket_price(r)
+    assert app.basket_price(r, short=True) == "₪1046 (חסרים 3)"
+    assert app.basket_price({"miss": 0, "sum": 5, "have": 5}) == "₪5"
     for lat, lng in ((31.8948, 34.8113), (32.0809, 34.7806)):
         u = {"step": "done", "prefs": {"home": [lat, lng], "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "hist": [],
              "items": [dict(x) for x in BBQ_ITEMS]}
         r = app.compute(u)
         if r["miss"]: assert "שחסר" in r["main"], r["main"][:300]
         for nm, ml in r["miss_all"]:
-            blk = next(b for b in r["others"].split("\n\n") if nm in b); assert "שחסר" in blk, blk[:300]
+            blk = next(b for b in r["others"].split("\n\n") if nm in b); assert f"(חסרים {len(ml)})" in blk, blk[:300]
+        assert "~" not in r["main"] + r["others"] + r["details"], "סימן ~ ליד מחיר"
 
 @test("'מה זיהיתי' מסודר לפי מחלקות בסופר (ירקות, חלב, ניקיון...) – סעיף 5, בקשה 12/10")
 def _():
@@ -953,12 +954,12 @@ def _():
     orig = app.compute
     try:
         base = {"main": "", "store": "רמי לוי שטמפפר", "saved": 0, "ip": {}, "nav": "https://waze.com/x", "details": "📋 הסל שלך", "others": "",
-                "split": None, "miss": [], "rare": [], "miss_all": [], "have": 310, "mins": 9, "kosher": True, "wolt": None}
-        app.compute = lambda uu: dict(base, stay=False, gap=42, ref="שופרסל יש פ\"ת", ref_have=352)
+                "split": None, "miss": [], "rare": [], "miss_all": [], "have": 310, "sum": 310, "mins": 9, "kosher": True, "wolt": None}
+        app.compute = lambda uu: dict(base, stay=False, gap=42, ref="שופרסל יש פ\"ת", ref_have=352, ref_sum=352)
         OUT.clear(); assert app.send_daybefore(to, U) == "switch"
         t = texts()[-1]; assert "מחר יום קניות" in t and "חוסך ₪42" in t and "₪352" in t and "plan_ok" in str(OUT[-1].get("reply_markup")), t
         assert len(t) < 260, len(t)                                                         # הודעה קצרה
-        app.compute = lambda uu: dict(base, stay=True, gap=4, ref="רמי לוי שטמפפר", ref_have=314)
+        app.compute = lambda uu: dict(base, stay=True, gap=4, ref="רמי לוי שטמפפר", ref_have=314, ref_sum=314)
         OUT.clear(); assert app.send_daybefore(to, U) == "stay"
         t = texts()[-1]; assert "משתלם" in t and "רק ₪4" in t and "כל הכבוד" in t, t
     finally:
@@ -1000,6 +1001,50 @@ def _():
     OUT.clear(); press(to, "set:remind"); assert app.USERS[to]["prefs"].get("remind_off") and "⬜ הודעה שבועית" in str(OUT[-1]["reply_markup"])
     press(to, "set:remind"); assert not app.USERS[to]["prefs"].get("remind_off")
     OUT.clear(); press(to, "set:more"); assert "איך משתמשים" in last() and "set:faq" in buttons() and "set:reset" in buttons()
+
+@test("דיוק (אורי 20/10): עגבניות שרי בסניף שמוכר רק מארזים → המארז (לא 'חסר'); ירק/פרי מעובד או זן אחר – לא חלופה")
+def _():
+    D = kdata.D; i = D.code2i["P02"]; pk = app.packed_alts(i)
+    assert pk, "אין חלופת מארז לעגבניות שרי"
+    names = [D.items[j][1] for j, _ in pk]
+    assert not any(re.search(r"כבוש|מיובש|רוטב|MUTTI|פיצה", n) for n in names), names
+    j, kg = next((j, kg) for j, kg in pk if kg)
+    P = kdata.Prices({j: 11.9})
+    it = {"name": D.items[i][1], "qty": 0.9, "i": i, "g": [i], "fb": [], "wfb": None, "frz": [], "pk": pk}
+    c = app.lc(P, it); assert c and c[2] and abs(c[0] - 11.9 * max(1, round(0.9 / kg))) < 0.01, c
+    tom = [D.items[j][1] for j, _ in app.packed_alts(D.code2i["P01"])]
+    assert not any("שרי" in n or "מקולפ" in n or "%" in n for n in tom), tom                # עגבנייה ≠ שרי / שימורים / רסק
+    sh = [st for st in D.stores if st["chain"] == "שופרסל" and "דיל" in st["n"]][:40]
+    f, _ = app.match_items([{"name": "עגבניות שרי", "qty": 1}]); x = f[0]; k = D.code2i[x["code"]]
+    it = {"name": x["name"], "qty": 1, "i": k, "g": D.group(k, x["src"]), "fb": D.fallback(k, x["src"]), "wfb": None, "frz": [], "pk": app.packed_alts(k)}
+    miss = sum(1 for st in sh if app.lc(D.store_prices(st, (), cache=False), it) is None)
+    assert miss <= len(sh) * 0.25, f"עגבניות שרי חסר ב-{miss}/{len(sh)} סניפי שופרסל דיל"
+
+@test("סעיף 5 (אורי 20/10): המבצעים בתוך ההודעה השבועית – הודעה אחת; אחריה אין הודעת מבצעים נפרדת")
+def _():
+    to = "tg:deal5"; setup_user(to, 32.0880, 34.8860); U = app.USERS[to]
+    f, _ = app.match_items([{"name": n, "qty": 1} for n in ("חלב", "לחם אחיד", "ביצים")])
+    U["hist"] = [{"d": int(time.time()) - k * 604800, "saved": 0, "items": [{"code": x["code"], "name": x["name"], "src": x["src"], "qty": 1} for x in f]} for k in (2, 1)]
+    orig = app.find_deals
+    try:
+        app.find_deals = lambda u, n=5: [(5.0, "• *חלב* – ₪5 במקום ₪7 ברמי לוי", f[0]["code"])]
+        OUT.clear(); app.send_reminder(to, U)
+        t = texts()[-1]; assert "וגם במבצע השבוע" in t and "₪5 במקום ₪7" in t, t
+        assert app.send_deals(to, U) is False                                       # לא הודעה נוספת
+        U["prefs"]["deals_off"] = True; U.pop("deal_sent", None)
+        OUT.clear(); app.send_reminder(to, U); assert "במבצע" not in texts()[-1]     # כיבה מבצעים – בלי
+    finally:
+        app.find_deals = orig
+
+@test("דיוק התאמה (אורי 20/10): הגודל שנכתב קובע ('חלב 3% 2 ליטר', 'במבה 80ג'), מארז 4*160 = רביעייה, ק''ג = ק\"ג")
+def _():
+    D = kdata.D
+    assert kdata.parse_size("אבקת כביסה קולור 4.5 ק''ג אריאל") == 4500 and kdata.parse_size("קמח 1 ק\"ג") == 1000
+    assert kdata.toks("טונה (160x4 גרם)")[1:3] == ["160", "4"]
+    for q, want in (("חלב 3% 2 ליטר", 2000), ("במבה 80ג", 80)):
+        i = D.search(q, 1)[0]; assert D.size(i) == want, (q, D.items[i][1])
+    i = D.search("טונה במים 4*160", 1)[0]
+    assert re.search(r"4\s*[*xX]\s*160|160\s*[*xX]\s*4|רביעי", D.items[i][1]), D.items[i][1]
 
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
