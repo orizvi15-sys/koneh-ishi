@@ -271,6 +271,7 @@ class Data:
             words = [w for w in toks(query or name) if w not in UNIT_WORDS and not re.fullmatch(r"[\d.,*xX]+", w)][:2]
             if words:
                 have = name + " " + (query or "")
+                if "מוקפא" in have or "קפוא" in have: have += " קפוא מוקפא"     # "מנגו מוקפא" = "מנגו קפוא" (20/10)
                 pct = _pcts(query or name)
                 base = set(self.group(i, query))
                 cands = self.group(i, " ".join(words), n=40, tol=0.25)
@@ -301,6 +302,32 @@ class Data:
                         if any(f in rest and f not in have for f in FB_VARIANT): continue
                         if pct and not pct <= _pcts(nm): continue
                         out.append(j); seen.add(j)
+        self._groups[key] = out
+        return out
+
+    def scaled_alts(self, i, query=None):
+        """[(j, יחס גודל)] – אותו מוצר בגודל אחר (סלמי 300 גרם במקום 500, חלב 1 ליטר במקום 1.5) – המחיר מחושב לפי הגודל.
+        (20/10: ~30% מה"חסרים" בסניפים אחרים היו אותו מוצר בגודל אחר.) רק כשאין בסניף את המוצר או חלופה באותו גודל."""
+        key = ("sc", i, query)
+        if key in self._groups: return self._groups[key]
+        code, name = self.items[i][0], self.items[i][1]; out = []
+        s0 = self.size(i)
+        if code[:1].isdigit() and s0:
+            words = [w for w in toks(query or name) if w not in UNIT_WORDS and not re.fullmatch(r"[\d.,*xX]+", w)][:2]
+            have = name + " " + (query or "")
+            if "מוקפא" in have or "קפוא" in have: have += " קפוא מוקפא"
+            pct = _pcts(query or name)
+            near = set(self.group(i, query)) | set(self.fallback(i, query))
+            for j in self.group(i, " ".join(words), n=60, tol=1.0) if words else []:
+                if j in near or j == i: continue
+                s1 = self.size(j)
+                if not s1 or not 0.5 <= s1 / s0 <= 2.0: continue
+                nm = self.items[j][1]
+                if any(f in nm and f not in have for f in FB_VARIANT): continue
+                if pct and not pct <= _pcts(nm): continue
+                p0, p1 = self.items[i][3], self.items[j][3]
+                if p0 and p1 and not 0.4 <= (p1 / s1) / (p0 / s0) <= 2.5: continue   # מחיר ליחידת משקל דומה – אותו סוג מוצר
+                out.append((j, s0 / s1))
         self._groups[key] = out
         return out
 

@@ -511,7 +511,7 @@ def match_items(items, u=None):
         a = d.code2i.get(basic_alias(it["name"]) or "")
         if a is not None: cand[k] = [a]                 # אין מה לבחור – זה הפריט הרגיל
         bc = barcode_item(d, it.get("code"))
-        if bc is not None: cand[k] = [bc]               # ברקוד מהקבלה = בדיוק אותו מוצר (אורי 20/10: "רוטב עגבניות 22%" הותאם לרוטב לפיצה)
+        if bc is not None: cand[k] = [bc]; it["_bc"] = True               # ברקוד מהקבלה = בדיוק אותו מוצר (אורי 20/10: "רוטב עגבניות 22%" הותאם לרוטב לפיצה)
     picks = [c[0] if c else None for c in cand]
     fixed = [False] * len(items)
     for k, it in enumerate(items):
@@ -549,7 +549,7 @@ def match_items(items, u=None):
         n = q * 1000 / g
         return max(1, round(n)) if abs(n - round(n)) < 0.15 else round(n, 2)
     found = [dict(item_of(d, picks[i], pack_qty(picks[i], it["qty"]), it["name"]), c=[d.items[k][0] for k in cand[i] if k != picks[i]][:4],
-                  **({"paid": round(float(it["price"]), 2)} if it.get("price") else {}))
+                  **({"paid": round(float(it["price"]), 2)} if it.get("price") else {}), **({"bc": True} if it.get("_bc") else {}))
              for i, it in enumerate(items) if picks[i] is not None]
     merged = {}                                          # אותה שורה פעמיים בקבלה (בטטה 1.555 + בטטה 0.435) – שורה אחת עם הכמות והמחיר יחד
     for x in found:
@@ -675,6 +675,14 @@ def lc(P, it):
                     n = int(q // k); c2 = n * bundle + (q - n * k) * reg
                     if c2 < c - 0.009: c, txt = c2, f"{k} ב־₪{money(bundle)}"
             if best is None or c < best[0]: best = (c, txt, kdata.D.items[g][1] if sub else None)
+        if best: return best
+    sc = it.get("sc")                                  # אותו מוצר בגודל אחר – לפי הגודל (סלמי 300 במקום 500 גרם, אורי 20/10)
+    if sc:
+        best = None
+        for j, f in sc:
+            if j not in P: continue
+            c = P[j] * it["qty"] * f
+            if best is None or c < best[0]: best = (c, None, kdata.D.items[j][1] + " – לפי הגודל")
         if best: return best
     pk = it.get("pk")                                  # ירק/פרי שבסניף נמכר רק ארוז → מספר מארזים לפי המשקל (אורי 20/10)
     if pk:
@@ -815,6 +823,12 @@ def basket_price(r, short=False):
     n = len(r.get("mlist") or []) or r["miss"]          # מוצרים שונים (שורה כפולה בקבלה = מוצר אחד, כמו ב"מה חסר")
     return f"₪{r['sum']:.0f}" + (f" (חסרים {n})" if short else f" _(כולל {'מוצר אחד שחסר' if n == 1 else f'{n} שחסרים'} שם – לפי המחיר באזור)_")
 
+STALE_REC_H = 72         # קובץ מחירים של סניף ישן מ-3 ימים – לא נכנס להשוואה (חוץ מהסופר הקבוע/של הקבלה)
+
+def stale_store(s):
+    a = _ts_age_h(s.get("ts")) if s.get("ts") else None
+    return a is not None and a > STALE_REC_H
+
 def miss_est(r):
     """(ישן – נשאר לתאימות) הערכה למוצרים שחסרים בסניף"""
     if not r.get("miss"): return ""
@@ -839,7 +853,7 @@ def compute(u):
             g = [i] if mine else D.group(i, q)
             wf = None if mine or not D.items[i][0][:1].isdigit() else weighed_fb(D.items[i][1])
             if wf: wf = (D.code2i[wf[0]], wf[1]) if wf[0] in D.code2i else None
-            items.append(dict(it, i=i, g=g, fb=[] if mine else D.fallback(i, q), wfb=wf, frz=[] if mine else frozen_alts(i), pk=[] if mine else packed_alts(i)))
+            items.append(dict(it, i=i, g=g, fb=[] if mine else D.fallback(i, q), wfb=wf, frz=[] if mine else frozen_alts(i), pk=[] if mine else packed_alts(i), sc=[] if mine else D.scaled_alts(i, q)))
     if not items:
         return ["לא מצאתי אף אחד מהמוצרים במאגר המחירים העדכני 🙁 נסה לכתוב אותם שוב."]
     near = sorted(((km(home, s["p"]), s) for s in D.stores), key=lambda x: x[0])
@@ -847,6 +861,7 @@ def compute(u):
     rows = []
     for k, (d1, s) in enumerate(near[:MAX_POOL * 2]):
         if k > 0 and mins(d1) > pr["maxMin"] and len(rows) >= 1: break
+        if stale_store(s): continue                    # מחירים ישנים (השרת הישראלי לא רץ) – לא ממליצים לפיהם (אורי 20/10: דיוק)
         rows.append({"s": s, "d": 2 * d1, "min": mins(d1), "P": D.store_prices(s, clubs), "club": s["chain"] in clubs and s.get("cblob", -1) >= 0})
         if len(rows) >= MAX_POOL: break
     uk = usual_store(u)
@@ -2127,7 +2142,8 @@ def receipt_check(store_key, rows, found):
     ch = acc.setdefault(st["chain"], [0, 0])               # [נבדקו, תואמים]
     deals = getattr(P, "deals", {})
     for f in found:
-        r = paid.get(f.get("src"))
+        # 20/10: רק שורות שזוהו לפי ברקוד (בדיוק אותו מוצר), עם המחיר והכמות של השורה עצמה
+        r = {"price": f["paid"], "qty": f["qty"]} if f.get("bc") and f.get("paid") else None
         i = D.code2i.get(f.get("code", ""))
         if not r or i is None or i not in P: continue
         ours = lc(P, {"g": [i], "qty": r["qty"]})
