@@ -944,7 +944,7 @@ def compute(u):
     if stay:
         if rk and best is reg:                    # קבלה: מה ששילמו בפועל
             L.append(f"👍 הסופר שקנית בו משתלם: *{s['n']}*" + kosher_tag(s))
-            L.append(f"💰 שילמת: *₪{best['sum']:.0f}*" + (" (על המוצרים שהושוו)" if rare else ""))
+            L.append(f"💰 שילמת: *₪{best['sum']:.0f}*" + (f" על {len(items)} מוצרים שהושוו" if rare else ""))   # מספר ברור, לא "המוצרים שהושוו"
         else:
             L.append((f"👍 הסופר הקבוע שלך משתלם: *{s['n']}*" if reg else f"👍 הסופר הקרוב אליך משתלם: *{s['n']}*") + kosher_tag(s))
             L.append(f"💰 מחיר הסל: *{basket_price(best)}*" + (" (במחירי מועדון)" if best.get("club") else ""))
@@ -1072,8 +1072,12 @@ def finish(to, u, redo=False):
             wk_count("baskets")
             wk_count("missing", [f"{x['name']} @ {res['store']}" for x in u["items"] if (res["ip"].get(x.get("code", "")) or [0, False])[1]])
         n, miss = len(u["items"]), len(u.get("missed") or [])
-        main = res["main"] + (f"\n⚠️ _{miss} מוצרים לא זוהו – אפשר לכתוב אותם אחרת_" if miss else "")   # בלי "זיהיתי N" (אורי 20/10)
-        if u.get("note"): main += "\n\n" + u.pop("note")
+        note = u.pop("note", "")
+        nm = "מוצר אחד לא זוהה" if miss == 1 else f"{miss} מוצרים לא זוהו"
+        if note.startswith("⚠️ חלק מהקבלה"):            # אזהרה אחת קצרה במקום שתיים (אורי 20/10)
+            main = res["main"] + f"\n⚠️ _חלק מהקבלה לא היה ברור{f' ({nm})' if miss else ''} – אפשר לצלם שוב את החלק הזה או לכתוב מה חסר_"
+        else:
+            main = res["main"] + (f"\n⚠️ _{nm} – אפשר לכתוב אותם אחרת_" if miss else "") + (f"\n\n{note}" if note else "")
         send_buttons(to, main, ([("plan_ok", "✅ מאשר")] if u.get("plan") else []) + result_buttons(res))
     if u.get("plan"):                                     # תיקון של הסל המשוער – תחזית, לא קנייה: לא נכנס להיסטוריה
         u["step"] = "done"; save_users(); return

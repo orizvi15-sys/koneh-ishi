@@ -1078,6 +1078,22 @@ def _():
     assert bul["qty"] < 1, bul                                                  # 0.18 ק"ג מדלפק ≠ אריזה שלמה של 250 גרם
     assert app.basket_price({"miss": 0, "have": 553.4, "sum": 553.4}) == "₪553"
 
+@test("קבלה חלקית עם מוצר שלא זוהה (אורי 20/10): אזהרה אחת קצרה, 'מוצר אחד לא זוהה' (לא '1 מוצרים')")
+def _():
+    to = "tg:part20"; setup_user(to, 32.0880, 34.8860)
+    items = [{"name": "חלב 3% 1 ליטר", "qty": 1}, {"name": "לחם אחיד", "qty": 1}, {"name": "קזזקזזק פפפ", "qty": 1}]
+    def fk(prompt, image=None, mime=None, keep_dict=False):
+        if prompt.startswith(app.RECEIPT_PROMPT[:40]) and image: return {"store": "", "items": items, "quality": "partial", "issue": "cut"}
+        if "Match each" in prompt: return []
+        return fake_claude(prompt, image, mime, keep_dict)
+    orig = app.claude_json; app.claude_json = fk; orig_m = app.match_items
+    app.match_items = lambda its, u=None: (lambda f: (f[0], f[1] + (["קזזקזזק פפפ"] if "קזזקזזק פפפ" not in f[1] else [])))(orig_m([x for x in its if "קזז" not in x["name"]], u))
+    try: OUT.clear(); photo(to)
+    finally: app.claude_json = orig; app.match_items = orig_m
+    if app.USERS[to].get("step") == "forgot": press(to, "noadd")
+    t = next(x for x in texts() if "💰" in x)
+    assert t.count("⚠️") == 1 and "מוצר אחד לא זוהה" in t and "1 מוצרים" not in t, t
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:
