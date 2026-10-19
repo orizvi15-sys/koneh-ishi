@@ -301,7 +301,8 @@ RECEIPT_PROMPT = ('Extract the purchased products from this Israeli supermarket 
                   '"ביצים – 12 יחידות" = {"name":"ביצים 12 יחידות","qty":1}, "מים מינרליים – שישייה" = qty 1, "קמח – 1 ק\"ג" = {"name":"קמח 1 ק\"ג","qty":1}. '
                   'Be consistent: the same input must always give the same output. '
                   'For a receipt also add "price" = the total paid for that line in shekels (after per-line discount if printed on the line), '
-                  'or null if not readable / a shopping list. '
+                  'or null if not readable / a shopping list. Also add "code" = the barcode / item code printed on that line (digits only, '
+                  'usually 7–13 digits at the start or end of the line, e.g. "7290000208428"), or null if none is printed or readable. '
                   'Photos are often blurry, dark, crooked or crumpled: extract every product line you can read with reasonable confidence, '
                   'skip lines you cannot read, never invent products. Also add "quality": "ok" (everything readable), "partial" (some lines '
                   'unreadable or the receipt is cut off) or "bad" (almost nothing readable), and "issue": one of "dark", "blurry", "cut", '
@@ -326,6 +327,8 @@ def extract_items(image=None, mime="image/jpeg", text=None, with_store=False):
             pr = float(x.get("price")) if x.get("price") not in (None, "") else None
             if pr and 0 < pr < 2000: row["price"] = pr
         except Exception: pass
+        code = re.sub(r"\D", "", str(x.get("code") or ""))
+        if 4 <= len(code) <= 14: row["code"] = code
         out.append(row)
     return (out, store, meta) if with_store else out
 
@@ -473,6 +476,14 @@ def common_first(name, c):
 
 MATCH_MEM_MAX = 6000
 
+def barcode_item(d, code):
+    """המוצר לפי הברקוד שמודפס בקבלה. רק ברקוד אמיתי (7+ ספרות) – קודים קצרים הם קוד פנימי של הרשת (ירקות, דלפק)."""
+    if not code or len(code) < 7: return None
+    for c in (code, code.lstrip("0")):
+        i = d.code2i.get(c)
+        if i is not None and i not in d.dlv_only(): return i
+    return None
+
 def mkey(name): return " ".join(kdata.toks(name)).strip()
 
 def match_items(items, u=None):
@@ -499,6 +510,8 @@ def match_items(items, u=None):
     for k, it in enumerate(items):
         a = d.code2i.get(basic_alias(it["name"]) or "")
         if a is not None: cand[k] = [a]                 # אין מה לבחור – זה הפריט הרגיל
+        bc = barcode_item(d, it.get("code"))
+        if bc is not None: cand[k] = [bc]               # ברקוד מהקבלה = בדיוק אותו מוצר (אורי 20/10: "רוטב עגבניות 22%" הותאם לרוטב לפיצה)
     picks = [c[0] if c else None for c in cand]
     fixed = [False] * len(items)
     for k, it in enumerate(items):
@@ -528,13 +541,24 @@ def match_items(items, u=None):
     for i, it in enumerate(items):                     # שם כללי ("פסטה") – מוצר בסיסי לא יוצא "לא מצאתי" גם אם Claude לא בחר
         if picks[i] is None and cand[i]: picks[i] = generic_pick(it["name"], cand[i])
     def pack_qty(k, q):
-        """משקל בק"ג מקבלה (0.5) שהותאם למוצר ארוז (500 גרם) → מספר אריזות (1), ולא חצי אריזה"""
+        """משקל בק"ג מקבלה (0.5) שהותאם למוצר ארוז (500 גרם) → מספר אריזות (1), ולא חצי אריזה.
+        משקל של דלפק (0.18 ק"ג בולגרית) מול אריזה של 250 גרם → 0.72 אריזה – מחיר לפי משקל, לא אריזה שלמה (אורי 20/10)"""
         if q is None or abs(q - round(q)) < 0.01 or not d.items[k][0][:1].isdigit(): return q
         g = kdata.parse_size(d.items[k][1])
         if not g or g < 100 or re.search(r'מ"?ל|ליטר', d.items[k][1]): return q
-        return max(1, round(q * 1000 / g))
-    found = [dict(item_of(d, picks[i], pack_qty(picks[i], it["qty"]), it["name"]), c=[d.items[k][0] for k in cand[i] if k != picks[i]][:4])
+        n = q * 1000 / g
+        return max(1, round(n)) if abs(n - round(n)) < 0.15 else round(n, 2)
+    found = [dict(item_of(d, picks[i], pack_qty(picks[i], it["qty"]), it["name"]), c=[d.items[k][0] for k in cand[i] if k != picks[i]][:4],
+                  **({"paid": round(float(it["price"]), 2)} if it.get("price") else {}))
              for i, it in enumerate(items) if picks[i] is not None]
+    merged = {}                                          # אותה שורה פעמיים בקבלה (בטטה 1.555 + בטטה 0.435) – שורה אחת עם הכמות והמחיר יחד
+    for x in found:
+        key = x["code"] if "paid" in x else id(x)        # רק שורות מקבלה (עם מחיר)
+        y = merged.get(key)
+        if y is None: merged[key] = x; continue
+        y["qty"] = round(y["qty"] + x["qty"], 3)
+        if "paid" in y or "paid" in x: y["paid"] = round(y.get("paid", 0) + x.get("paid", 0), 2)
+    found = list(merged.values())
     missed = [it["name"] for i, it in enumerate(items) if picks[i] is None]
     return found, missed
 
@@ -826,6 +850,10 @@ def compute(u):
         rows.append({"s": s, "d": 2 * d1, "min": mins(d1), "P": D.store_prices(s, clubs), "club": s["chain"] in clubs and s.get("cblob", -1) >= 0})
         if len(rows) >= MAX_POOL: break
     uk = usual_store(u)
+    rk = u.get("rstore") if any(it.get("paid") for it in items) else None
+    if rk and any(st_["key"] == rk for st_ in D.stores) and km(home, next(st_["p"] for st_ in D.stores if st_["key"] == rk)) <= REG_MAX_KM:
+        uk = rk                                        # קבלה: משווים מול הסניף שבו קנו בפועל, במחירים ששולמו (אורי 20/10)
+    else: rk = None
     if uk and not any(r["s"]["key"] == uk for r in rows):      # הסופר הקבוע (קרוב לבית) תמיד בהשוואה
         s0 = next(s for s in D.stores if s["key"] == uk); d1 = km(home, s0["p"])
         rows.append({"s": s0, "d": 2 * d1, "min": mins(d1), "P": D.store_prices(s0, clubs), "club": s0["chain"] in clubs and s0.get("cblob", -1) >= 0})
@@ -834,11 +862,19 @@ def compute(u):
     for it in items:
         v = sorted(x for x in (gp(r["P"], it) for r in rows) if x is not None)
         med[it["i"]] = v[min(len(v) - 1, 3 * len(v) // 4)] if v else D.items[it["i"]][3] / 100   # רבעון עליון: סניף עם חסרים לא "מנצח" בזכותם
+    def lcr(r, it):                                    # בסניף של הקבלה – מה ששולם בפועל; בשאר – לפי המחירים
+        if rk and it.get("paid"):
+            if r["s"]["key"] == rk: return (it["paid"], None, None)
+            c = lc(r["P"], it)
+            # המחיר בקבלה הוא האמת: מחיר בסניף אחר שרחוק פי 2.5 ממנו = כנראה מוצר אחר / יחידה אחרת (גבינת דלפק לק"ג מול אריזה)
+            if c and not 0.4 <= c[0] / it["paid"] <= 2.5: return None
+            return c
+        return lc(r["P"], it)
     def stats():
         for r in rows:
             tot = 0; miss = 0; mlist = []; have = 0
             for it in items:
-                c = lc(r["P"], it)
+                c = lcr(r, it)
                 if c is None: miss += 1; c = med[it["i"]] * it["qty"]; mlist.append(it["name"].replace(' (לק"ג)', "")) if it["name"].replace(' (לק"ג)', "") not in mlist else None
                 else: c = c[0]; have += c              # מחיר מדויק – רק מה שיש בסניף (להצגה), כולל מבצעי כמות
                 tot += c                               # להשוואה בין סניפים – חסר מוערך לפי האזור
@@ -850,7 +886,7 @@ def compute(u):
     inr = [r for r in rows if r["min"] <= pr["maxMin"]] or rows[:1]
     want, n0 = min(3, len(inr)), len(items)          # רוצים לפחות 3 סניפים להשוואה – אבל לא מוציאים יותר משליש מהסל בשביל זה
     while len(items) > 1 and ((n_ok := sum(1 for r in inr if ok_miss(r))) == 0 or (n_ok < want and len(rare) < n0 // 3)):
-        it = max(items, key=lambda it: sum(1 for r in inr if lc(r["P"], it) is None))
+        it = max(items, key=lambda it: sum(1 for r in inr if lcr(r, it) is None))
         items = [x for x in items if x["name"] != it["name"]]; rare.append(it["name"].replace(' (לק"ג)', "")); stats()   # כולל שורות כפולות של אותו מוצר
     if all(r["miss"] == len(items) for r in inr):        # אף סניף בטווח לא מוכר אף מוצר מהסל – לא ממליצים על "₪0"
         names = list(dict.fromkeys(it["name"].replace(' (לק"ג)', "") for it in items))
@@ -874,7 +910,7 @@ def compute(u):
             for b in range(a + 1, len(pool)):
                 A, B = pool[a], pool[b]; tot = 0; inA, inB = [], []; ok = True
                 for it in items:
-                    pa, pb = lc(A["P"], it), lc(B["P"], it)
+                    pa, pb = lcr(A, it), lcr(B, it)
                     if pa is None and pb is None: ok = False; break
                     if pb is None or (pa is not None and pa[0] <= pb[0]): tot += pa[0]; inA.append(it["name"])
                     else: tot += pb[0]; inB.append(it["name"])
@@ -906,16 +942,20 @@ def compute(u):
     inc = ""
     ride = "🚗" if car else ("🚌" if bus else "🚶")
     if stay:
-        L.append((f"👍 הסופר הקבוע שלך משתלם: *{s['n']}*" if reg else f"👍 הסופר הקרוב אליך משתלם: *{s['n']}*") + kosher_tag(s))
-        L.append(f"💰 מחיר הסל: *{basket_price(best)}*" + (" (במחירי מועדון)" if best.get("club") else "")
-                 )
+        if rk and best is reg:                    # קבלה: מה ששילמו בפועל
+            L.append(f"👍 הסופר שקנית בו משתלם: *{s['n']}*" + kosher_tag(s))
+            L.append(f"💰 שילמת: *₪{best['sum']:.0f}*" + (" (על המוצרים שהושוו)" if rare else ""))
+        else:
+            L.append((f"👍 הסופר הקבוע שלך משתלם: *{s['n']}*" if reg else f"👍 הסופר הקרוב אליך משתלם: *{s['n']}*") + kosher_tag(s))
+            L.append(f"💰 מחיר הסל: *{basket_price(best)}*" + (" (במחירי מועדון)" if best.get("club") else ""))
         L.append(f"✅ זה הכי זול באזור 🏆" if gap < 1 else f"✅ במקום אחר היית חוסך רק ₪{gap:.0f}{inc} – לא שווה את הטרחה")
     else:
         L.append(f"🏆 הסופר המנצח: *{s['n']}*" + kosher_tag(s))
         L.append(f"💰 מחיר הסל: *{basket_price(best)}*" + (" (במחירי מועדון)" if best.get("club") else "")
                  )
         if ref:
-            L.append(f"✅ חוסך *₪{gap:.0f}* לעומת {ref['s']['n']}" + ("" if reg else " (הקרוב אליך)") + inc)
+            L.append(f"✅ חוסך *₪{gap:.0f}* לעומת מה ששילמת ב{ref['s']['n']}" + (" על אותם מוצרים" if rare else "") + f" (₪{ref['sum']:.0f})" if rk and ref is reg else
+                     f"✅ חוסך *₪{gap:.0f}* לעומת {ref['s']['n']}" + ("" if reg else " (הקרוב אליך)") + inc)
         elif avg and avg - best["tot"] >= 1:
             L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}*{inc}")
     L.append(f"{ride} {round(best['min'])} דק' {how} ממך")       # בלי "(אזור …)" – האזור מופיע ב"היי" (אורי 20/10: פחות מלל)
@@ -923,7 +963,8 @@ def compute(u):
     if dlv: L.append(f"🛵 או במשלוח מ*{dlv['s']['chain']}*: {basket_price(dlv, short=True)} + דמי משלוח")
     if rare:                                   # רק כמה – את השמות רואים בכפתור "מה חסר" (אורי 18/10: רשימה ארוכה מבלבלת)
         nr = len(dict.fromkeys(rare))
-        L.append("🔎 _" + ("מוצר אחד לא נמצא" if nr == 1 else f"{nr} מוצרים לא נמצאו") + " בסופרים באזור שלך_")
+        L.append("🔎 _" + ("מוצר אחד לא נמכר" if nr == 1 else f"{nr} מוצרים לא נמכרים") + " בסופרים אחרים באזור – לא נכללו בהשוואה_" if rk else
+                 "🔎 _" + ("מוצר אחד לא נמצא" if nr == 1 else f"{nr} מוצרים לא נמצאו") + " בסופרים באזור שלך_")
     split_txt = None
     if split and best["tot"] - split["tot"] > split_min:
         A, B = split["A"]["s"], split["B"]["s"]
@@ -933,8 +974,8 @@ def compute(u):
     if s["key"] not in {r["s"]["key"] for r in shown}: shown = [best] + shown[:OTHERS_SHOW - 1]
     # פירוט מחירי הסל בסופר המנצח
     det = []
-    for it in sorted(items, key=lambda it: -((lc(best["P"], it) or (med[it["i"]] * it["qty"],))[0])):
-        c = lc(best["P"], it)
+    for it in sorted(items, key=lambda it: -((lcr(best, it) or (med[it["i"]] * it["qty"],))[0])):
+        c = lcr(best, it)
         q = f" ×{it['qty']:g}" if it["qty"] != 1 else ""
         det.append(f"• {it['name']}{q} – " + (f"₪{c[0]:.2f}" + (f" 🔥 _מבצע {c[1]}_" if c[1] else "")
                                                + (f" _(אין בסניף – במקום: {c[2]})_" if c[2] else "") if c is not None
@@ -945,7 +986,7 @@ def compute(u):
     saved = 0 if stay else (gap if ref else (avg - best["tot"] if avg else 0))
     ip = {}
     for it in items:                                   # מחיר כל מוצר בסופר המומלץ (ל"מה זיהיתי")
-        c = lc(best["P"], it)
+        c = lcr(best, it)
         ip[it.get("code", "")] = [round(c[0] if c else med[it["i"]] * it["qty"], 2), c is None, c[1] if c else None]
     return {"main": "\n".join(L), "store": s["n"], "saved": max(0, round(saved)), "ip": ip,
             "nav": f"https://waze.com/ul?ll={s['p'][0]},{s['p'][1]}&navigate=yes",
@@ -2063,6 +2104,7 @@ def got_receipt(to, u, img, mime):
     sk = match_store(store_txt, pr.get("home"))
     print("receipt store:", store_txt, "->", sk, flush=True)
     if sk: st = u.setdefault("stores", {}); st[sk] = st.get(sk, 0) + 1
+    u["rstore"] = sk                                         # הסניף של הקבלה – בסיס ההשוואה, במחירים ששולמו
     if meta.get("quality") == "partial":
         u["note"] = "⚠️ חלק מהקבלה לא היה ברור – אפשר לשלוח עכשיו צילום של החלק החסר ואחבר אותו, או לכתוב מה חסר ✍️"
     res = got_items(to, u, items)

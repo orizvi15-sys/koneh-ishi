@@ -207,7 +207,8 @@ class Data:
         med = it[3] / 100 if len(it) > 3 and it[3] else 0
         if med <= 1: return False
         if p < 0.25 * med: return True                              # רבע מהחציון הארצי ומטה
-        return it[0][:1] in "PMW" and p > 4 * med                   # במשקל: פי 4 מהחציון = כנראה מחיר ליחידה/אריזה
+        if it[0][:1] in "PMW": return p > 4 * med                  # במשקל: פי 4 מהחציון = כנראה מחיר ליחידה/אריזה
+        return p > 3.5 * med                                        # ארוז, אותו ברקוד: פי 3.5 מהחציון = מחיר של מארז/ארגז (בירה ₪41.9 מול ₪8 – 20/10)
 
     def price(self, store, i):
         return self.prices(store["blob"]).get(i)

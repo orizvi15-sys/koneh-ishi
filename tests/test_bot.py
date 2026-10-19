@@ -1046,6 +1046,38 @@ def _():
     i = D.search("טונה במים 4*160", 1)[0]
     assert re.search(r"4\s*[*xX]\s*160|160\s*[*xX]\s*4|רביעי", D.items[i][1]), D.items[i][1]
 
+@test("הקבלה של אבא (אורי 20/10, יוחננוף נס ציונה ₪617): ברקוד = אותו מוצר, משווים מול מה ששולם, הסניף של הקבלה תמיד בהשוואה")
+def _():
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures"))
+    import receipt_yohananof_nesziona as R
+    D = kdata.D
+    st = next((s for s in D.stores if s["chain"] == "יוחננוף" and "נס ציונה" in s["n"] + s["a"]), None)
+    if not st: return
+    if app.barcode_item(D, "7290000207162") is None: return                     # קובץ נתונים ישן בלי המוצר
+    assert "100" in D.items[app.barcode_item(D, "7290000207162")][1]          # רסק 100 גרם, לא רוטב לפיצה
+    assert app.barcode_item(D, "622") is None                                   # קוד פנימי קצר – לא ברקוד
+    to = "tg:father20"; setup_user(to, st["p"][0] + 0.004, st["p"][1] + 0.003)
+    items = [{"name": n, "qty": q, "price": p, "code": c} for n, q, p, c in R.ITEMS]
+    def fk(prompt, image=None, mime=None, keep_dict=False):
+        if prompt.startswith(app.RECEIPT_PROMPT[:40]) and image: return {"store": R.STORE, "items": items, "quality": "ok", "issue": ""}
+        return fake_claude(prompt, image, mime, keep_dict)
+    orig = app.claude_json; app.claude_json = fk
+    try: OUT.clear(); photo(to)
+    finally: app.claude_json = orig
+    u = app.USERS[to]
+    if u.get("step") == "forgot": press(to, "noadd")
+    assert u.get("rstore") == st["key"], u.get("rstore")
+    main = next(t for t in texts() if "💰" in t)
+    assert "שילמת" in main, main                                                # מול מה ששולם בפועל – לא מול סופר אחר
+    assert len(u["last"]["rare"]) <= 4, u["last"]["rare"]                       # לא "חסרים 8"
+    bt = [x for x in u["items"] if x["name"].startswith("בטטה")]
+    assert len(bt) == 1 and abs(bt[0]["qty"] - 1.99) < 0.01 and abs(bt[0]["paid"] - 15.72) < 0.01, bt   # שתי שורות בטטה = אחת
+    rs = next(x for x in u["items"] if x.get("code") == D.items[app.barcode_item(D, "7290000207162")][0])
+    assert rs["qty"] == 8, rs
+    bul = next(x for x in u["items"] if "בולגרית" in x["src"])
+    assert bul["qty"] < 1, bul                                                  # 0.18 ק"ג מדלפק ≠ אריזה שלמה של 250 גרם
+    assert app.basket_price({"miss": 0, "have": 553.4, "sum": 553.4}) == "₪553"
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

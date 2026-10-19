@@ -357,6 +357,53 @@ def wide_round(n=200):
         stats["המלצה: נשארים" if "משתלם" in clean else "המלצה: לעבור"] += 1
     return stats
 
+# ================= 7. קבלות "אמיתיות" (20/10, אחרי הקבלה של אבא של אורי) =================
+# מוצרים אמיתיים מסניף אמיתי, שם קטוע ל-20 תווים כמו בקבלה, ברקוד ב-70% מהשורות, מחיר ששולם. בודק שהבוט הוגן:
+# הסניף של הקבלה תמיד בסיס ההשוואה, לא מוציאים חלק גדול מהסל, ואין "חיסכון" מופרך.
+NOT_GROCERY = re.compile(r"כבל|USB|סוללות|מנורת|כרית|כסא|קומקום|מגבות מיקרו|עט |פצירה|טורמוס|מתקן לייבוש|שבועון|אביזרי|וינסטון|סיגר|מזון לכלב|מזון חתולים|ניקוטין")
+
+def real_receipts_round(n=80):
+    rnd = random.Random(int(time.strftime("%U")) + 31)
+    sup = [s for s in SUPER if s["chain"] not in IL_CHAINS and not re.search(r"אקספרס|AM|PM", s["n"])]
+    stats = collections.Counter()
+    for st in rnd.sample(sup, min(n, len(sup))):
+        P = D.store_prices(st, (), cache=False)
+        pool = [i for i in P if D.items[i][2] >= 15 and not D.items[i][0].startswith("W:") and not NOT_GROCERY.search(D.items[i][1])]
+        if len(pool) < 200: continue
+        common = [i for i in pool if D.items[i][2] >= 400]; mid = [i for i in pool if D.items[i][2] < 400]
+        k = rnd.randint(20, 35); sel = rnd.sample(common, min(len(common), int(k * .6))) + rnd.sample(mid, min(len(mid), k - int(k * .6)))
+        lines = []
+        for i in sel:
+            code, nm = D.items[i][0], D.items[i][1]
+            q = round(rnd.uniform(0.3, 2.0), 3) if code[:1] in "PM" else rnd.choice([1, 1, 1, 2, 3])
+            row = {"name": nm[:20].strip(), "qty": q, "price": round(P[i] * q, 2)}
+            if code[:1].isdigit() and rnd.random() < 0.7: row["code"] = code
+            lines.append(row)
+        paid = sum(r["price"] for r in lines)
+        home = [st["p"][0] + rnd.uniform(-0.01, 0.01), st["p"][1] + rnd.uniform(-0.01, 0.01)]
+        to = f"tg:rr{st['key']}"; app.USERS[to] = mkuser(home); app.USERS[to]["items"] = []
+        br = st["n"][len(st["chain"]):].strip() if st["n"].startswith(st["chain"]) else st["n"]
+        def fk(prompt, image=None, mime=None, keep_dict=False, _l=lines, _s=f"{st['chain']} – {br}"):
+            if prompt.startswith(app.RECEIPT_PROMPT[:40]) and image: return {"store": _s, "items": _l, "quality": "ok", "issue": ""}
+            return fake_claude(prompt, image, mime, keep_dict)
+        app.claude_json = fk; OUT.clear()
+        try: photo(to)
+        except Exception as ex: issue("קבלה אמיתית – קריסה", f"{st['n']}: {ex}"); continue
+        finally: app.claude_json = fake_claude
+        u = app.USERS[to]
+        if u.get("step") == "forgot": press(to, "noadd")
+        main = next((re.sub(r"<[^>]+>", "", t) for t in texts() if "💰" in t), None)
+        if not main: issue("קבלה אמיתית – אין תוצאה", st["n"]); continue
+        stats["קבלות"] += 1; last = u.get("last") or {}
+        if u.get("rstore") != st["key"]: issue("קבלה אמיתית – הסניף לא זוהה", f"{st['n']} → {u.get('rstore')}")
+        stay = "שקנית בו" in main; stats["נשארים" if stay else "לעבור"] += 1
+        m = re.search(r"חוסך ₪(\d+) לעומת מה ששילמת", main)
+        if not stay and not m: issue("קבלה אמיתית – המלצה בלי השוואה למה ששולם", f"{st['n']}: {main[:150]}")
+        nr = len(last.get("rare") or []); stats["שורות"] += len(lines); stats["הוצאו מההשוואה"] += nr
+        if nr > len(lines) // 4: issue("קבלה אמיתית – רבע מהסל הוצא מההשוואה", f"{st['n']}: {nr}/{len(lines)}")
+        if m and int(m.group(1)) > 0.3 * paid: issue("קבלה אמיתית – חיסכון מעל 30% (לבדוק התאמות)", f"{st['n']}: ₪{m.group(1)} מתוך ₪{paid:.0f}")
+    return stats
+
 # ================= הרצה =================
 def main():
     t0 = time.time()
@@ -371,12 +418,15 @@ def main():
     chat_round(); print("✓ שיחות")
     wide = wide_round(200 if "--wide" in sys.argv[1:] or WIDE else 0) if (WIDE or not QUICK) else collections.Counter()
     if wide: print("✓ קבלות בכל הערים")
+    real = real_receipts_round(40 if QUICK else 100); print("✓ קבלות אמיתיות")
     print("\n=== מיקומים ===\n" + "\n".join(rows))
     print("\n=== קבלות ===\n" + "\n".join(rc))
     if wide:
         print(f"\n=== קבלות בכל הערים: {wide['קבלות']} ===")
         for k, v in wide.most_common():
             if not k.startswith("חסר: ") or v >= 3: print(f"  {k}: {v}")
+    print(f"\n=== קבלות אמיתיות (ברקוד + מחיר ששולם): {real['קבלות']} – נשארים {real['נשארים']}, לעבור {real['לעבור']}, "
+          f"הוצאו מההשוואה {real['הוצאו מההשוואה']}/{real['שורות']} שורות ===")
     n = sum(len(v) for v in ISSUES.values())
     print(f"\n========== {n} ממצאים ({time.time() - t0:.0f} שנ') ==========")
     if stale: print(f"ℹ️ רשתות השרת הישראלי עם מחירים ישנים (לא באג בבוט): {', '.join(stale)}")
