@@ -909,7 +909,7 @@ def _():
     assert len(u["items"]) == 5 and len(u["hist"]) == 3 and u["hist"][-1]["items"][0]["code"] == f[0]["code"], "תיקון התחזית דרס קנייה אמיתית"
     assert "plan_ok" in str(OUT[-1].get("reply_markup")), OUT[-1]
     OUT.clear(); press(to, "plan_ok"); t = "\n".join(texts())
-    assert "סגור" in t and "waze.com" in t and "הסל שלך" in t, t[:300]
+    assert "סגור" in t and "waze.com" in str(OUT[-1].get("reply_markup")) and "chk:0" in str(OUT[-1].get("reply_markup")), t[:300]
     OUT.clear(); send(to, "חלב, פסטה")                                          # רשימה חדשה = קנייה רגילה
     if u.get("step") == "forgot": press(to, "noadd")                            # "בדרך כלל אתה קונה גם…"
     assert not u.get("plan") and len(u["hist"]) == 4, (u.get("plan"), len(u["hist"]))
@@ -1210,6 +1210,64 @@ def _():
         assert sum(app.stale_store(s_) for s_ in fresh) <= 2, "סניפי שופרסל נחשבו ישנים כשהנתונים עצמם ישנים"
     finally:
         D.built = old
+
+@test("רשימת קניות חיה (אורי 20/10): אחרי 'נלך לשם' – רשימה לפי מחלקות, ✅ על אותה הודעה, 'סיימתי' מבקש קבלה")
+def _():
+    to = "tg:shop20"; setup_user(to, 32.0880, 34.8860); U = app.USERS[to]
+    OUT.clear(); send(to, "במבה, חלב, עגבניה, לחם אחיד, קוטג'")
+    if U.get("step") == "forgot": press(to, "noadd")
+    OUT.clear(); press(to, "plan_ok")
+    kb = OUT[-1]["reply_markup"]["inline_keyboard"]; sh = U["shop"]
+    assert len(sh["rows"]) == 5 and all(r[0]["text"].startswith("⬜") for r in kb[:5]), kb
+    assert "רשימת הקניות" in last() and "shopdone" in str(kb[-1]) and "waze" in str(kb[-1]), kb[-1]
+    order = {d: k for k, (d, _) in enumerate(app.DEPTS)}                     # לפי סדר המחלקות
+    depts = [order[app.dept_of(x["code"], x["name"])] for x in U["items"]]
+    assert sorted(depts) == [order[app.dept_of(x["code"], x["name"])] for x in sorted(U["items"], key=lambda x: order[app.dept_of(x["code"], x["name"])])]
+    assert any("במבה" in r for r in sh["rows"][-2:]) or depts.count(max(depts)) > 1, sh["rows"]   # חטיפים אחרי ירקות/חלב
+    edits = []; orig = app.tg_call
+    app.tg_call = lambda m, p: edits.append((m, p)) or {}
+    try:
+        app.safe_handle({"from": to, "id": "s1", "name": "x", "mid": 55, "type": "interactive", "interactive": {"button_reply": {"id": "chk:1"}}})
+    finally: app.tg_call = orig
+    assert edits and edits[0][0] == "editMessageReplyMarkup" and edits[0][1]["message_id"] == 55, edits   # אותה הודעה, בלי הודעה חדשה
+    assert edits[0][1]["reply_markup"]["inline_keyboard"][1][0]["text"].startswith("✅") and U["shop"]["done"] == [1]
+    press(to, "chk:1"); assert U["shop"]["done"] == []                       # לחיצה שנייה – מבטל
+    press(to, "chk:0"); OUT.clear(); press(to, "shopdone")
+    assert "shop" not in U and "נשארו 4" in last() and "cam" in buttons(), last()
+    OUT.clear(); press(to, "chk:0"); assert "לא פעילה" in last()             # כפתור ישן אחרי סיום
+
+@test("מוצרים מיוחדים (אורי 20/10 – 9 קבלות איבדו רבע סל): מוצר דומה באותו גודל נספר; מה שאין בכלל – באותו מחיר בכל סופר, לא נעלם מהסכום")
+def _():
+    D = kdata.D
+    f, _ = app.match_items([{"name": "במבה", "qty": 1}]); i = D.code2i[f[0]["code"]]
+    sim = D.similar_alts(i)
+    for j, fac in sim:
+        assert j != i and 0.5 <= fac <= 2 and kdata.stem("במבה") in D.meta(j)[1], (D.items[j][1], fac)   # אותו סוג, גודל עד פי 2
+    st = next(s for s in D.stores if s["chain"] == "רמי לוי" and not app.stale_store(s))
+    to = "tg:spec20"; setup_user(to, st["p"][0] + 0.003, st["p"][1] + 0.003); U = app.USERS[to]
+    f, _ = app.match_items([{"name": n, "qty": 1} for n in ("חלב", "לחם אחיד", "ביצים", "קוטג'", "פסטה", "אורז")])
+    P = D.store_prices(st, ())
+    its = [dict(x, paid=round(P[D.code2i[x["code"]]], 2)) for x in f if D.code2i[x["code"]] in P]
+    near = [D.store_prices(s_, ()) for s_ in sorted(D.stores, key=lambda s_: app.km(st["p"], s_["p"]))[1:12] if not app.stale_store(s_)]
+    rare = [i for i in P if D.items[i][0][:1].isdigit() and P[i] > 5 and sum(i in Q for Q in near) == 0][:4]   # רק בסניף הזה באזור
+    if len(rare) < 3: return
+    its += [dict(app.item_of(D, i, 1, D.items[i][1]), paid=round(P[i], 2), sure=True) for i in rare]   # כמעט רק בסניף הזה
+    U["items"] = its; U["rstore"] = st["key"]
+    paid = sum(x["paid"] for x in its)
+    OUT.clear(); app.finish(to, U, redo=True)
+    main = next((t for t in texts() if "💰" in t), "")
+    m = re.search(r"שילמת: <b>₪(\d+)", main) or re.search(r"שילמת: ₪(\d+)", main)
+    assert m and abs(int(m.group(1)) - paid) <= 1, (paid, main)                # כל הקבלה בסכום – גם המוצרים המיוחדים
+    if U["last"].get("rare"):                                                  # לא נמצא גם מוצר דומה – מסומן, לא נעלם
+        assert "מוצרים מיוחדים" in main and "מוצר מיוחד" in U["last"]["details"], main
+
+@test("כלל מעבר משולב (אורי 20/10): לא שולחים לסופר אחר על חיסכון קטן – מינימום ₪, לפחות 4% מהסל, ועוד ₪1 לכל דקה נוספת")
+def _():
+    ref = {"sum": 400.0, "min": 5}; near = {"min": 6}; far = {"min": 25}
+    assert app.switch_need(35, ref, near) == 35                                # סל קטן-בינוני: המינימום
+    assert app.switch_need(35, {"sum": 1500.0, "min": 5}, near) == 60          # סל גדול: 4%
+    assert app.switch_need(35, ref, far) == 35 + 15                            # 20 דקות יותר, 5 ראשונות חינם
+    assert app.switch_need(35, ref, {"min": 3}) == 35                          # קרוב יותר – אין תוספת
 
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])

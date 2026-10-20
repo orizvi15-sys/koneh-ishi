@@ -693,6 +693,14 @@ def lc(P, it):
             c = P[j] * it["qty"] * f
             if best is None or c < best[0]: best = (c, None, kdata.D.items[j][1] + " – לפי הגודל")
         if best: return best
+    sm = it.get("sim")                                 # מוצר מיוחד שאין בסניף – מוצר דומה (אותו סוג/מותג, טעם אחר), לפי הגודל (20/10)
+    if sm:
+        best = None
+        for j, f in sm:
+            if j not in P: continue
+            c = P[j] * it["qty"] * f
+            if best is None or c < best[0]: best = (c, None, kdata.D.items[j][1] + " – מוצר דומה")
+        if best: return best
     pk = it.get("pk")                                  # ירק/פרי שבסניף נמכר רק ארוז → מספר מארזים לפי המשקל (אורי 20/10)
     if pk:
         best = None
@@ -832,6 +840,14 @@ def basket_price(r, short=False):
     n = len(r.get("mlist") or []) or r["miss"]          # מוצרים שונים (שורה כפולה בקבלה = מוצר אחד, כמו ב"מה חסר")
     return f"₪{r['sum']:.0f}" + (f" (חסרים {n})" if short else f" _(כולל {'מוצר אחד שחסר' if n == 1 else f'{n} שחסרים'} שם – לפי המחיר באזור)_")
 
+# כלל המעבר המשולב (אורי 20/10): לפחות ₪35 (₪25 לסל במשקל), וגם לפחות 4% מהסל, ועוד ₪1 לכל דקת נסיעה נוספת מעבר ל-5
+STAY_PCT, STAY_FREE_MIN, STAY_PER_MIN = 0.04, 5, 1.0
+
+def switch_need(stay_min, ref, best):
+    """כמה צריך לחסוך כדי שיהיה שווה לעבור מהסופר הקבוע/הקרוב לסופר אחר"""
+    extra = max(0.0, best["min"] - ref["min"] - STAY_FREE_MIN)
+    return max(stay_min, STAY_PCT * ref["sum"]) + extra * STAY_PER_MIN
+
 STALE_REC_H = 72         # קובץ מחירים של סניף ישן מ-3 ימים – לא נכנס להשוואה (חוץ מהסופר הקבוע/של הקבלה)
 
 def stale_store(s):
@@ -865,7 +881,8 @@ def compute(u):
             g = [i] if mine else D.group(i, q)
             wf = None if mine or not D.items[i][0][:1].isdigit() else weighed_fb(D.items[i][1])
             if wf: wf = (D.code2i[wf[0]], wf[1]) if wf[0] in D.code2i else None
-            items.append(dict(it, i=i, g=g, fb=[] if mine else D.fallback(i, q), wfb=wf, frz=[] if mine else frozen_alts(i), pk=[] if mine else packed_alts(i), sc=[] if mine else D.scaled_alts(i, q)))
+            items.append(dict(it, i=i, g=g, fb=[] if mine else D.fallback(i, q), wfb=wf, frz=[] if mine else frozen_alts(i), pk=[] if mine else packed_alts(i), sc=[] if mine else D.scaled_alts(i, q),
+                              sim=[] if mine else D.similar_alts(i)))
     if not items:
         return ["לא מצאתי אף אחד מהמוצרים במאגר המחירים העדכני 🙁 נסה לכתוב אותם שוב."]
     near = sorted(((km(home, s["p"]), s) for s in D.stores), key=lambda x: x[0])
@@ -897,9 +914,14 @@ def compute(u):
             if c and not 0.4 <= c[0] / it["paid"] <= 2.5: return None
             return c
         return lc(r["P"], it)
+    special = []                                       # מוצרים מיוחדים שכמעט אין בסופרים אחרים – במחיר זהה בכל סניף
+    def neutral(it):
+        return it["paid"] if rk and it.get("paid") else med[it["i"]] * it["qty"]
     def stats():
         for r in rows:
             tot = 0; miss = 0; mlist = []; have = 0
+            for it in special:                         # אותו מחיר בכל סניף: לא משפיע על ההשוואה, אבל הסל מלא (₪617 ולא ₪450 – 20/10)
+                c = neutral(it); tot += c; have += c
             for it in items:
                 c = lcr(r, it)
                 if c is None: miss += 1; c = med[it["i"]] * it["qty"]; mlist.append(it["name"].replace(' (לק"ג)', "")) if it["name"].replace(' (לק"ג)', "") not in mlist else None
@@ -914,6 +936,7 @@ def compute(u):
     want, n0 = min(3, len(inr)), len(items)          # רוצים לפחות 3 סניפים להשוואה – אבל לא מוציאים יותר משליש מהסל בשביל זה
     while len(items) > 1 and ((n_ok := sum(1 for r in inr if ok_miss(r))) == 0 or (n_ok < want and len(rare) < n0 // 3)):
         it = max(items, key=lambda it: sum(1 for r in inr if lcr(r, it) is None))
+        special += [x for x in items if x["name"] == it["name"]]
         items = [x for x in items if x["name"] != it["name"]]; rare.append(it["name"].replace(' (לק"ג)', "")); stats()   # כולל שורות כפולות של אותו מוצר
     if all(r["miss"] == len(items) for r in inr):        # אף סניף בטווח לא מוכר אף מוצר מהסל – לא ממליצים על "₪0"
         names = list(dict.fromkeys(it["name"].replace(' (לק"ג)', "") for it in items))
@@ -962,7 +985,7 @@ def compute(u):
     gap = ref["tot"] - best["tot"] if ref else 0
     if ref and ref is not best and best["miss"]:       # במנצח חסרים מוצרים: החיסכון חייב להתקיים גם על מה שיש בשניהם (אורי 20/10: חיסכון אמיתי)
         gap = min(gap, common_gap(ref, best))
-    stay = ref is not None and gap < stay_min
+    stay = ref is not None and gap < switch_need(stay_min, ref, best)
     if stay:                                   # לא שווה לעזוב את הסופר הקבוע / הקרוב
         alt = best; best = ref
         if ref in ranked: ranked.remove(ref)
@@ -979,7 +1002,7 @@ def compute(u):
     if stay:
         if rk and best is reg:                    # קבלה: מה ששילמו בפועל
             L.append(f"👍 הסופר שקנית בו משתלם: *{s['n']}*" + kosher_tag(s))
-            L.append(f"💰 שילמת: *₪{best['sum']:.0f}*" + (f" על {len(items)} מוצרים שהושוו" if rare else ""))   # מספר ברור, לא "המוצרים שהושוו"
+            L.append(f"💰 שילמת: *₪{best['sum']:.0f}*")
         else:
             L.append((f"👍 הסופר הקבוע שלך משתלם: *{s['n']}*" if reg else f"👍 הסופר הקרוב אליך משתלם: *{s['n']}*") + kosher_tag(s))
             L.append(f"💰 מחיר הסל: *{basket_price(best)}*" + (" (במחירי מועדון)" if best.get("club") else ""))
@@ -989,7 +1012,7 @@ def compute(u):
         L.append(f"💰 מחיר הסל: *{basket_price(best)}*" + (" (במחירי מועדון)" if best.get("club") else "")
                  )
         if ref:
-            L.append(f"✅ חוסך *₪{gap:.0f}* לעומת מה ששילמת ב{ref['s']['n']}" + (" על אותם מוצרים" if rare else "") + f" (₪{ref['sum']:.0f})" if rk and ref is reg else
+            L.append(f"✅ חוסך *₪{gap:.0f}* לעומת מה ששילמת ב{ref['s']['n']} (₪{ref['sum']:.0f})" if rk and ref is reg else
                      f"✅ חוסך *₪{gap:.0f}* לעומת {ref['s']['n']}" + ("" if reg else " (הקרוב אליך)") + inc)
         elif avg and avg - best["tot"] >= 1:
             L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}*{inc}")
@@ -998,8 +1021,8 @@ def compute(u):
     if dlv: L.append(f"🛵 או במשלוח מ*{dlv['s']['chain']}*: {basket_price(dlv, short=True)} + דמי משלוח")
     if rare:                                   # רק כמה – את השמות רואים בכפתור "מה חסר" (אורי 18/10: רשימה ארוכה מבלבלת)
         nr = len(dict.fromkeys(rare))
-        L.append("🔎 _" + ("מוצר אחד לא נמכר" if nr == 1 else f"{nr} מוצרים לא נמכרים") + " בסופרים אחרים באזור – לא נכללו בהשוואה_" if rk else
-                 "🔎 _" + ("מוצר אחד לא נמצא" if nr == 1 else f"{nr} מוצרים לא נמצאו") + " בסופרים באזור שלך_")
+        L.append("🔎 _" + ("מוצר מיוחד אחד" if nr == 1 else f"{nr} מוצרים מיוחדים") + " שכמעט אין בסופרים אחרים – חושבו בכל סופר לפי מה ששילמת_" if rk else
+                 "🔎 _" + ("מוצר אחד כמעט לא נמכר" if nr == 1 else f"{nr} מוצרים כמעט לא נמכרים") + " באזור – חושבו בכל סופר לפי המחיר הרגיל_")
     split_txt = None
     if split and best["tot"] - split["tot"] > split_min:
         A, B = split["A"]["s"], split["B"]["s"]
@@ -1016,7 +1039,9 @@ def compute(u):
         det.append(f"• {it['name']}{q} – " + (f"₪{c[0]:.2f}" + (f" 🔥 _מבצע {c[1]}_" if c[1] else "")
                                                + (f" _(אין בסניף – במקום: {c[2]})_" if c[2] else "") if c is not None
                                                else f"₪{med[it['i']] * it['qty']:.2f} _(חסר בסניף – מחיר באזור)_"))
-    if rare: det.append("\n_לא מצאתי בסופרים באזור שלך (לא נכלל בהשוואה): " + ", ".join(dict.fromkeys(rare)) + "_")
+    for it in special:                                 # מוצרים מיוחדים – במחיר הזהה שחושב בכל סניף
+        q = f" ×{it['qty']:g}" if it["qty"] != 1 else ""
+        det.append(f"• {it['name']}{q} – ₪{neutral(it):.2f} _(מוצר מיוחד – {'מה ששילמת' if rk and it.get('paid') else 'מחיר באזור'})_")
     if gone: det.append("\n_לא נמצאו במאגר: " + ", ".join(gone) + "_")
     fresh = f"\n\n_מחירים ומבצעים מעודכנים ל-{D.built[8:10]}/{D.built[5:7]} {D.built[11:16]}_" if len(D.built) >= 16 else ""
     saved = 0 if stay else (gap if ref else (avg - best["tot"] if avg else 0))
@@ -1024,6 +1049,7 @@ def compute(u):
     for it in items:                                   # מחיר כל מוצר בסופר המומלץ (ל"מה זיהיתי")
         c = lcr(best, it)
         ip[it.get("code", "")] = [round(c[0] if c else med[it["i"]] * it["qty"], 2), c is None, c[1] if c else None]
+    for it in special: ip[it.get("code", "")] = [round(neutral(it), 2), False, None]
     return {"main": "\n".join(L), "store": s["n"], "saved": max(0, round(saved)), "ip": ip,
             "nav": f"https://waze.com/ul?ll={s['p'][0]},{s['p'][1]}&navigate=yes",
             "details": f"📋 *הסל שלך ב{s['n']}:*\n" + "\n".join(det) + fresh,
@@ -1093,7 +1119,7 @@ def missing_text(last, every=False):
         L.append(f"❌ *חסר ב{last.get('store', 'סופר המומלץ')}:*\n" + "\n".join("• " + x for x in last["miss"])
                  + "\n_המחיר שלהם בסל הוא הערכה לפי הסופרים באזור._")
     if last.get("rare"):
-        L.append("🔎 *לא נמצאו בסופרים באזור שלך* (לא נכללו בהשוואה):\n" + "\n".join("• " + x for x in last["rare"]))
+        L.append("🔎 *מוצרים מיוחדים* (כמעט אין בסופרים אחרים – חושבו באותו מחיר בכל סופר):\n" + "\n".join("• " + x for x in last["rare"]))
     return "\n\n".join(L) or "לא חסר כלום בסופר המומלץ 👍"
 
 def finish(to, u, redo=False):
@@ -1934,6 +1960,38 @@ def dept_of(code, name):
     if d == "produce" and DEPT_LIQUID.search(n): return "drinks"        # "ג'אמפ תפוחים 1.5 ליטר" – מיץ, לא פרי
     return d
 
+SHOP_MAX = 60     # מגבלת כפתורים סבירה בהודעת טלגרם אחת
+
+def start_shop(u, last):
+    """רשימת קניות חיה: המוצרים לפי סדר המחלקות בסופר, כל מוצר כפתור שמסמנים ✅"""
+    ip = last.get("ip") or {}
+    order = {d: k for k, (d, _) in enumerate(DEPTS)}
+    rows = []
+    for x in u["items"]:
+        kg = 'לק"ג' in x["name"]
+        nm = x["name"].replace(' (לק"ג)', "")
+        q = (f" ×{x['qty']:g}ק\"ג" if kg else f" ×{x['qty']:g}") if x["qty"] != 1 else ""
+        pr = ip.get(x.get("code", ""))
+        miss = " ⚠️" if pr and pr[1] else ""                    # לא נמצא בסניף הזה – שיידעו מראש
+        rows.append((order[dept_of(x.get("code", ""), x["name"])], (nm[:28] + q + miss)))
+    rows.sort(key=lambda r: r[0])                               # sort יציב – בתוך מחלקה נשמר הסדר
+    u["shop"] = {"store": last.get("store", ""), "nav": last.get("nav"), "rows": [t for _, t in rows][:SHOP_MAX],
+                 "done": [], "t": int(time.time())}
+
+def shop_keyboard(u):
+    sh = u["shop"]
+    kb = [[{"text": ("✅ " if k in sh["done"] else "⬜ ") + t, "callback_data": f"chk:{k}"}] for k, t in enumerate(sh["rows"])]
+    last = [tg_btn("shopdone", "✅ סיימתי")]
+    if sh.get("nav"): last.insert(0, tg_btn(sh["nav"], "🧭 ניווט"))
+    return kb + [last]
+
+def send_shop(to, u):
+    sh = u["shop"]
+    txt = (f"סגור 👍 הקנייה ב*{sh['store']}*\n🛒 *רשימת הקניות* – לפי מחלקות. לוחצים על מוצר כשהוא בעגלה."
+           + ("\n⚠️ = לא מצאתי בסניף הזה" if any(t.endswith("⚠️") for t in sh["rows"]) else ""))
+    return tg_call("sendMessage", {"chat_id": to[3:], "text": tg_html(txt), "parse_mode": "HTML",
+                                   "reply_markup": {"inline_keyboard": shop_keyboard(u)}})
+
 def understood_text(u, missed=()):
     last = u.get("last") or {}; ip = last.get("ip") or {}
     by_dept = len(u["items"]) >= 5                     # סל קטן – רשימה רגילה; סל גדול – לפי מחלקות בסופר
@@ -2633,9 +2691,30 @@ def handle(msg):
         if last.get("store_key") and last.get("ref_key") and not last.get("stay"):
             u["went"] = {"store": last["store_key"], "ref": last["ref_key"], "t": int(time.time()), "gap": last.get("gap")}
             save_users()
+        if is_tg(to) and u.get("items"):              # רשימת קניות חיה (אורי 20/10): מסמנים ✅ תוך כדי הליכה בסופר
+            start_shop(u, last); save_users()
+            return send_shop(to, u)
         if last.get("details"): send_text(to, last["details"])
         nav = f"\n🧭 ניווט: {last['nav']}" if last.get("nav") else ""
         return send_text(to, f"סגור 👍 הקנייה ב*{last['store']}*.{nav}\n\n📷 _אחרי הקנייה – צלמו את הקבלה, ואבדוק כמה חסכתם באמת._")
+    if reply and reply.startswith("chk:"):
+        sh = u.get("shop")
+        try: k = int(reply[4:])
+        except ValueError: return
+        if not sh or not 0 <= k < len(sh["rows"]): return send_text(to, "הרשימה הזו כבר לא פעילה 🙂")
+        d = sh["done"]
+        if k in d: d.remove(k)
+        else: d.append(k)
+        save_users()
+        if is_tg(to) and msg.get("mid"):
+            return tg_call("editMessageReplyMarkup", {"chat_id": to[3:], "message_id": msg["mid"],
+                                                       "reply_markup": {"inline_keyboard": shop_keyboard(u)}})
+        return send_shop(to, u)
+    if reply == "shopdone":
+        sh = u.pop("shop", None); save_users()
+        left = len(sh["rows"]) - len(sh["done"]) if sh else 0
+        note = f"\n_(נשארו {left} מוצרים לא מסומנים)_" if left else ""
+        return send_buttons(to, f"כל הכבוד 🛒{note}\n\n📷 צלמו את הקבלה – ואבדוק כמה חסכתם באמת.", [("cam", "📷 צילום קבלה")])
     if reply in ("miss", "missall"):
         if not u.get("last"): return send_text(to, "אין לי עדיין חישוב להציג – כתבו *היי* כדי להתחיל קנייה 🙂")
         return send_text(to, missing_text(u["last"], every=reply == "missall"))

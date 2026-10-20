@@ -331,6 +331,32 @@ class Data:
         self._groups[key] = out
         return out
 
+    def similar_alts(self, i):
+        """[(j, יחס גודל)] – מוצר *דומה* (אותו סוג ומותג, טעם/גרסה אחרים, גודל עד פי 2) – רק כשאין בסניף את המוצר או חלופה
+        שקולה. נועד למוצרים מיוחדים מהקבלה (גלידה בטעם ליים-יוזו, גרנולה עם פירות) שלא נמכרים באף סופר אחר באזור –
+        במקום להוציא אותם מההשוואה (20/10: ב-9 מ-100 קבלות רבע מהסל יצא). המחיר לפי הגודל, ומסומן "מוצר דומה"."""
+        key = ("sim", i)
+        if key in self._groups: return self._groups[key]
+        code, name = self.items[i][0], self.items[i][1]; out = []
+        if code[:1].isdigit():
+            kw = [w for w in toks(name) if w not in UNIT_WORDS and w not in SEARCH_UNITS and not re.fullmatch(r"[\d.,*xX%]+", w)][:2]
+            s0, p0 = self.size(i), self.items[i][3]
+            if len(kw) == 2 and p0:
+                ks = [stem(w) for w in kw]
+                for j in self.search(" ".join(kw), 60):
+                    if j == i or not self.items[j][0][:1].isdigit() or self.items[j][2] < 30: continue
+                    ts = self.meta(j)[1]
+                    if not all(w in ts for w in ks): continue
+                    s1, p1 = self.size(j), self.items[j][3]
+                    if (s0 is None) != (s1 is None): continue
+                    f = s0 / s1 if s0 and s1 else 1.0
+                    if not 0.5 <= f <= 2.0 or not p1: continue
+                    if not 0.5 <= (p1 * f) / p0 <= 2.0: continue             # מחיר מותאם לגודל – באותו סדר גודל
+                    out.append((j, f))
+                    if len(out) >= 12: break
+        self._groups[key] = out
+        return out
+
     def learned_alt(self, i, j, mine, core):
         """לימוד עצמי: שם חדש של אותו מוצר בסיסי במשקל ("עגבניות טבע", "חזה טרי מחפוד") – בלי לחכות שמישהו יוסיף כלל.
         תנאים: כל המילים של המוצר המאוחד מופיעות (חוץ ממילים שמובנות מאליהן כמו "עוף"), המילים הנוספות לא משנות את המוצר

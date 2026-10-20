@@ -400,6 +400,9 @@ def real_receipts_round(n=80):
         m = re.search(r"חוסך ₪(\d+) לעומת מה ששילמת", main)
         if not stay and not m: issue("קבלה אמיתית – המלצה בלי השוואה למה ששולם", f"{st['n']}: {main[:150]}")
         nr = len(last.get("rare") or []); stats["שורות"] += len(lines); stats["הוצאו מההשוואה"] += nr
+        mp = re.search(r"שילמת: ₪(\d+)", main) or re.search(r"ששילמת ב[^(\n]*\(₪(\d+)\)", main)                   # מוצרים מיוחדים נשארים בסכום (20/10) – הסל לא "מתכווץ"
+        if mp and abs(int(mp.group(1)) - paid) <= max(3, 0.02 * paid): stats["סכום מלא"] += 1
+        elif mp: issue("קבלה אמיתית – 'שילמת' לא תואם לקבלה", f"{st['n']}: ₪{mp.group(1)} מול ₪{paid:.0f}")
         if nr > len(lines) // 4: issue("קבלה אמיתית – רבע מהסל הוצא מההשוואה", f"{st['n']}: {nr}/{len(lines)}")
         if m and int(m.group(1)) > 0.3 * paid: issue("קבלה אמיתית – חיסכון מעל 30% (לבדוק התאמות)", f"{st['n']}: ₪{m.group(1)} מתוך ₪{paid:.0f}")
     return stats
@@ -426,7 +429,7 @@ def main():
         for k, v in wide.most_common():
             if not k.startswith("חסר: ") or v >= 3: print(f"  {k}: {v}")
     print(f"\n=== קבלות אמיתיות (ברקוד + מחיר ששולם): {real['קבלות']} – נשארים {real['נשארים']}, לעבור {real['לעבור']}, "
-          f"הוצאו מההשוואה {real['הוצאו מההשוואה']}/{real['שורות']} שורות ===")
+          f"הוצאו מההשוואה {real['הוצאו מההשוואה']}/{real['שורות']} שורות, סכום 'שילמת' מלא ב-{real['סכום מלא']} ===")
     n = sum(len(v) for v in ISSUES.values())
     print(f"\n========== {n} ממצאים ({time.time() - t0:.0f} שנ') ==========")
     if stale: print(f"ℹ️ רשתות השרת הישראלי עם מחירים ישנים (לא באג בבוט): {', '.join(stale)}")
