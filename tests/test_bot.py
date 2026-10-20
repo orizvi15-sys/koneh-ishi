@@ -7,7 +7,7 @@
 הרצה מקומית:  DATA_CACHE=/path/koneh-data.bin python3 tests/test_bot.py
 (בלי מפתחות אמיתיים: Claude מוחלף ב"Claude מזויף" שעונה תשובות קבועות, וכלום לא נשלח לטלגרם)
 """
-import html, json, os, re, sys, tempfile, time, traceback
+import base64, html, json, os, re, sys, tempfile, time, traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -1161,6 +1161,55 @@ def _():
     assert "went" not in U and U["real"][-1]["n"] >= 3
     U["went"] = {"store": st["key"], "ref": ref["key"], "t": int(time.time())}
     assert app.verify_saving(to, U, ref["key"]) is None and "went" in U               # קבלה מסופר אחר – לא בודקים
+
+@test("מסך צילום קבלה (אורי 20/10): 'צילום קבלה' פותח מסך עם מצלמה וגלריה; רק משתמש אמיתי (חתימת טלגרם); התמונה מטופלת כמו קבלה")
+def _():
+    import hmac, hashlib, urllib.parse
+    assert 'capture="environment"' in app.CAM_PAGE and "multiple" in app.CAM_PAGE and "/cam/upload" in app.CAM_PAGE
+    old_tok, old_url = app.TG_TOKEN, app.CAM_URL
+    try:
+        app.TG_TOKEN = "123:TEST"; app.CAM_URL = "https://example.onrender.com/cam"
+        assert app.tg_btn("cam", "📷 צילום קבלה") == {"text": "📷 צילום קבלה", "web_app": {"url": app.CAM_URL}}
+        def init_for(uid, tok="123:TEST", age=0):
+            d = {"auth_date": str(int(time.time()) - age), "user": json.dumps({"id": uid})}
+            dcs = "\n".join(f"{k}={v}" for k, v in sorted(d.items()))
+            sec = hmac.new(b"WebAppData", tok.encode(), hashlib.sha256).digest()
+            d["hash"] = hmac.new(sec, dcs.encode(), hashlib.sha256).hexdigest()
+            return urllib.parse.urlencode(d)
+        assert app.tg_webapp_user(init_for(777)) == 777
+        assert app.tg_webapp_user(init_for(777, tok="999:OTHER")) is None                    # חתימה מזויפת
+        assert app.tg_webapp_user(init_for(777, age=3 * 86400)) is None                      # ישן
+        jpg = b"\xff\xd8\xff" + b"0" * 2000
+        assert app.cam_upload(json.dumps({"init": "x=1&hash=00", "img": base64.b64encode(jpg).decode()}))[0] == 403
+        to = "tg:777"; setup_user(to, 32.0880, 34.8860)
+        got = {}
+        orig, orig_dm = app.got_receipt, app.download_media
+        app.got_receipt = lambda t, u, img, mime: got.update(to=t, n=len(img), mime=mime) or app.send_text(t, "ok")
+        app.download_media = lambda mid: (app.RAW_IMG.pop(mid[4:])[0], "image/jpeg")
+        try:
+            code, _ = app.cam_upload(json.dumps({"init": init_for(777), "img": base64.b64encode(jpg).decode()}))
+            assert code == 200
+            for _ in range(50):
+                if got: break
+                time.sleep(0.05)
+        finally:
+            app.got_receipt, app.download_media = orig, orig_dm
+        assert got.get("to") == to and got.get("n") == len(jpg) and got.get("mime") == "image/jpeg", got
+        assert not app.RAW_IMG                                                                # לא נשאר בזיכרון
+    finally:
+        app.TG_TOKEN, app.CAM_URL = old_tok, old_url
+
+@test("עדכון נתונים שנתקע כמה ימים – לא מוציאים את כל הסניפים מההשוואה ('ישן' יחסית לנתונים, לא לשעון) – 20/10")
+def _():
+    D = kdata.D; old = D.built
+    try:
+        from datetime import timedelta
+        D.built = (app._dt.now(app.IL_TZ) - timedelta(days=6)).isoformat(timespec="minutes")
+        for s_ in D.stores[:0]: pass
+        fresh = [s_ for s_ in D.stores if s_["chain"] == "שופרסל"][:20]
+        assert sum(app.stale_store(s_) for s_ in fresh) <= 2, "סניפי שופרסל נחשבו ישנים כשהנתונים עצמם ישנים"
+    finally:
+        D.built = old
 
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])

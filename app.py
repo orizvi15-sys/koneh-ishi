@@ -205,7 +205,9 @@ def graph_post(path, payload):
 
 M_NEW, M_CAM, M_SET = "🛒 קנייה חדשה", "📷 צילום קבלה", "⚙️ הגדרות"
 # מקלדת קבועה אחת לכל השיחה – כולל כפתור מיקום (שימושי גם לעדכון מיקום בכל רגע)
-MENU = {"keyboard": [[{"text": "📍 שליחת המיקום שלי", "request_location": True}], [{"text": M_NEW}, {"text": M_CAM}], [{"text": M_SET}]],
+CAM_URL = (PUBLIC_URL.rstrip("/") + "/cam") if PUBLIC_URL.startswith("https://") else ""
+MENU = {"keyboard": [[{"text": "📍 שליחת המיקום שלי", "request_location": True}],
+                     [{"text": M_NEW}, ({"text": M_CAM, "web_app": {"url": CAM_URL}} if CAM_URL else {"text": M_CAM})], [{"text": M_SET}]],
         "resize_keyboard": True, "is_persistent": True}
 
 def send_text(to, text, menu=False):
@@ -220,6 +222,7 @@ def typing(to):
     if is_tg(to): tg_call("sendChatAction", {"chat_id": to[3:], "action": "typing"})
 
 def tg_btn(i, t):
+    if i == "cam" and CAM_URL: return {"text": t, "web_app": {"url": CAM_URL}}    # פותח את מסך הצילום (מצלמה / גלריה) – אורי 20/10
     return {"text": t, "url": i} if i.startswith("http") else {"text": t, "callback_data": i}
 
 def send_buttons(to, text, buttons):  # buttons: [(id, title<=20)] up to 3
@@ -247,7 +250,12 @@ def sniff_mime(b):
     if b[:3] == b"GIF": return "image/gif"
     return "unsupported"
 
+RAW_IMG = {}          # תמונות שהגיעו ממסך הצילום (Mini App) – נמחקות אחרי הקריאה
+
 def download_media(media_id):
+    if media_id.startswith("raw:"):
+        data, mime = RAW_IMG.pop(media_id[4:], (b"", "unsupported"))
+        return data, (sniff_mime(data) if data else mime)
     if media_id.startswith("tg:"):
         fp = tg_call("getFile", {"file_id": media_id[3:]})["result"]["file_path"]
         data = urllib.request.urlopen(f"https://api.telegram.org/file/bot{TG_TOKEN}/{fp}", timeout=30).read()
@@ -827,8 +835,11 @@ def basket_price(r, short=False):
 STALE_REC_H = 72         # קובץ מחירים של סניף ישן מ-3 ימים – לא נכנס להשוואה (חוץ מהסופר הקבוע/של הקבלה)
 
 def stale_store(s):
+    """ישן ביחס לשאר הנתונים (ולא לשעון): אם כל עדכון הנתונים נתקע ל-3 ימים, לא מוציאים את כל הסניפים מההשוואה"""
     a = _ts_age_h(s.get("ts")) if s.get("ts") else None
-    return a is not None and a > STALE_REC_H
+    if a is None: return False
+    ref = _iso_age_h(getattr(kdata.D, "built", "") or "") or 0          # כמה זמן עבר מאז שהנתונים נבנו
+    return a - max(0, ref) > STALE_REC_H
 
 def miss_est(r):
     """(ישן – נשאר לתאימות) הערכה למוצרים שחסרים בסניף"""
@@ -2748,6 +2759,9 @@ class H(BaseHTTPRequestHandler):
         p = urlparse(self.path).path
         if p == "/webhook" and q.get("hub.mode") == ["subscribe"] and q.get("hub.verify_token") == [VERIFY]:
             print("WA webhook verified"); body = q["hub.challenge"][0].encode(); self.send_response(200)
+        elif p == "/cam":
+            body = CAM_PAGE.encode(); self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8"); self.end_headers(); self.wfile.write(body); return
         elif p == "/privacy":
             body = PRIVACY.encode(); self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8"); self.end_headers(); self.wfile.write(body); return
@@ -2757,7 +2771,12 @@ class H(BaseHTTPRequestHandler):
             body = ("קונה אישי פועל ✅" + info).encode(); self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8"); self.end_headers(); self.wfile.write(body)
     def do_POST(self):
-        n = int(self.headers.get("Content-Length", 0)); raw = self.rfile.read(n)
+        n = int(self.headers.get("Content-Length", 0))
+        if urlparse(self.path).path == "/cam/upload":
+            if n > 12_000_000: self.send_response(413); self.end_headers(); return
+            code, txt = cam_upload(self.rfile.read(n))
+            self.send_response(code); self.send_header("Content-Type", "text/plain; charset=utf-8"); self.end_headers(); self.wfile.write(txt.encode()); return
+        raw = self.rfile.read(n)
         self.send_response(200); self.end_headers(); self.wfile.write(b"ok")
         if urlparse(self.path).path == "/telegram":
             try:
@@ -2781,6 +2800,67 @@ class H(BaseHTTPRequestHandler):
         except Exception as ex:
             print("bad payload", ex)
     def log_message(self, *a): pass
+
+# ---------- מסך צילום קבלה (Telegram Mini App) – אורי 20/10: לחיצה על "צילום קבלה" פותחת מצלמה, או גלריה ----------
+CAM_PAGE = """<!doctype html><html dir="rtl" lang="he"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<title>צילום קבלה</title>
+<style>
+ body{margin:0;font-family:system-ui,-apple-system,Arial,sans-serif;background:var(--tg-theme-bg-color,#fff);color:var(--tg-theme-text-color,#111);
+      display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;gap:18px;padding:24px;box-sizing:border-box;text-align:center}
+ h1{font-size:22px;margin:0 0 4px} p{margin:0;opacity:.75;font-size:15px}
+ label{display:block;width:100%;max-width:340px;padding:22px 0;border-radius:18px;font-size:22px;font-weight:700;cursor:pointer;
+       background:var(--tg-theme-button-color,#2F6BF0);color:var(--tg-theme-button-text-color,#fff)}
+ label.sec{background:var(--tg-theme-secondary-bg-color,#eef2fb);color:var(--tg-theme-text-color,#111)}
+ input{display:none} #st{font-size:18px;min-height:26px}
+</style></head><body>
+<h1>📷 צילום קבלה</h1><p>שימו את הקבלה על משטח, באור טוב. קבלה ארוכה – אפשר כמה תמונות.</p>
+<label>📷 לצלם עכשיו<input id="cam" type="file" accept="image/*" capture="environment"></label>
+<label class="sec">🖼️ מהגלריה<input id="gal" type="file" accept="image/*" multiple></label>
+<div id="st"></div>
+<script>
+const tg=window.Telegram&&Telegram.WebApp; if(tg){tg.ready();tg.expand();}
+const st=document.getElementById('st');
+function shrink(file){return new Promise((ok,bad)=>{const im=new Image();im.onload=()=>{const m=2200,k=Math.min(1,m/Math.max(im.width,im.height));
+ const c=document.createElement('canvas');c.width=Math.round(im.width*k);c.height=Math.round(im.height*k);c.getContext('2d').drawImage(im,0,0,c.width,c.height);
+ ok(c.toDataURL('image/jpeg',0.85).split(',')[1]);};im.onerror=bad;im.src=URL.createObjectURL(file);});}
+async function send(files){if(!files.length)return;st.textContent='⏳ שולח…';
+ try{for(let i=0;i<files.length;i++){const b=await shrink(files[i]);
+   const r=await fetch('/cam/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({init:tg?tg.initData:'',img:b})});
+   if(!r.ok)throw new Error(await r.text());}
+  st.textContent='✅ התקבל! התוצאה תגיע בצ׳אט';setTimeout(()=>tg&&tg.close(),1200);}
+ catch(e){st.textContent='🙁 לא הצלחתי לשלוח – אפשר לשלוח את התמונה ישר בצ׳אט (📎)';}}
+for(const id of ['cam','gal'])document.getElementById(id).addEventListener('change',e=>send(e.target.files));
+</script></body></html>"""
+
+def tg_webapp_user(init):
+    """בדיקת החתימה של טלגרם על המסך (initData) – רק משתמש אמיתי של הבוט יכול לשלוח קבלה. מחזיר מזהה משתמש או None."""
+    import hmac, hashlib
+    from urllib.parse import parse_qsl
+    if not init or not TG_TOKEN: return None
+    d = dict(parse_qsl(init, keep_blank_values=True)); h = d.pop("hash", "")
+    dcs = "\n".join(f"{k}={v}" for k, v in sorted(d.items()))
+    secret = hmac.new(b"WebAppData", TG_TOKEN.encode(), hashlib.sha256).digest()
+    if not hmac.compare_digest(hmac.new(secret, dcs.encode(), hashlib.sha256).hexdigest(), h): return None
+    try:
+        if time.time() - int(d.get("auth_date", 0)) > 86400: return None
+        return json.loads(d.get("user") or "{}").get("id")
+    except Exception: return None
+
+def cam_upload(raw):
+    """תמונה ממסך הצילום → כמו תמונה שנשלחה בצ'אט (אותה נעילה, אותו טיפול). מחזיר (קוד, טקסט)."""
+    try: data = json.loads(raw)
+    except Exception: return 400, "bad json"
+    uid = tg_webapp_user(data.get("init", ""))
+    if not uid: return 403, "not authorized"
+    try: img = base64.b64decode(data.get("img") or "")
+    except Exception: return 400, "bad image"
+    if not img or len(img) > 8_000_000: return 400, "bad size"
+    key = f"{uid}-{time.time_ns()}"; RAW_IMG[key] = (img, sniff_mime(img))
+    m = {"from": f"tg:{uid}", "id": f"cam-{key}", "type": "image", "image": {"id": "raw:" + key}}
+    threading.Thread(target=safe_handle, args=(m,), daemon=True).start()
+    return 200, "ok"
 
 _crash_sent = {}
 def crash_alert(m, ex, tb):
