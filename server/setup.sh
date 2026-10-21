@@ -5,6 +5,7 @@ set -e
 echo "== קונה אישי – התקנת שרת ישראלי =="
 apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git python3-venv python3-pip cron >/dev/null
 fallocate -l 2G /swapfile 2>/dev/null && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab || true
+[ -d /opt/koneh ] && [ ! -d /opt/koneh/.git ] && mv /opt/koneh "/opt/koneh-old-$(date +%s)"   # שאריות ישנות בלי git (21/10) – מזיזים הצידה
 if [ -d /opt/koneh/.git ]; then git -C /opt/koneh pull -q; else git clone -q https://github.com/orizvi15-sys/koneh-ishi /opt/koneh; fi
 cd /opt/koneh
 # הספרייה דורשת Python 3.12 (המערכת מגיעה עם גרסה חדשה מדי) – מתקינים 3.12 בנפרד עם uv
@@ -27,4 +28,13 @@ echo "== בדיקה: האם אתרי הרשתות נפתחים מכאן =="
 /opt/koneh/run.sh test || true
 echo
 echo "== סיום ההתקנה ✅ =="
-echo "השלב הבא: להכניס טוקן של GitHub עם הפקודה:  sudo nano /opt/koneh/.env"
+# טוקן GitHub (Fine-grained: רק koneh-ishi, Contents = Read and write). מודבק בלי שיופיע על המסך ובלי להישמר בהיסטוריה (21/10)
+if ! grep -q '^GITHUB_TOKEN=.' /opt/koneh/.env 2>/dev/null; then
+  if [ -r /dev/tty ]; then
+    read -s -p "Paste GitHub token, then Enter: " T < /dev/tty; echo
+    [ -n "$T" ] && echo "GITHUB_TOKEN=$T" > /opt/koneh/.env && echo "token saved (length ${#T})"; unset T
+  else
+    echo "להכנסת טוקן:  sudo bash  ואז:  read -s T && echo GITHUB_TOKEN=\$T > /opt/koneh/.env"
+  fi
+fi
+echo "הרצה ראשונה:  sudo /opt/koneh/run.sh --full   (אמורות להופיע שורות 'uploaded chain-...')"
