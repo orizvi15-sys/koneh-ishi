@@ -850,6 +850,15 @@ def switch_need(stay_min, ref, best):
 
 STALE_REC_H = 72         # קובץ מחירים של סניף ישן מ-3 ימים – לא נכנס להשוואה (חוץ מהסופר הקבוע/של הקבלה)
 
+SMALL_CHAINS = {"יילו", "דור אלון"}          # חנויות נוחות בתחנות דלק / מכולות קיבוץ / AM:PM
+SMALL_NAME = re.compile(r"\bBE\b|AM.?PM", re.I)        # שופרסל אקספרס – סופר שכונתי אמיתי, נשאר
+REG_EXTRA_MIN = 15  # אין סופר רגיל בטווח – מוסיפים את הקרובים עד 15 דק' יותר
+
+def small_store(s):
+    """חנות נוחות (תחנת דלק, מכולת קיבוץ, AM:PM, שופרסל BE): לא נקודת השוואה ולא המלצה כשיש סופר רגיל בהישג יד
+    (אורי 21/10: מחנה רעים → נשלח ל'דור אלון כפר עזה', תחנת דלק בלי רוב המוצרים)"""
+    return s["chain"] in SMALL_CHAINS or bool(SMALL_NAME.search(s["n"]))
+
 def stale_store(s):
     """ישן ביחס לשאר הנתונים (ולא לשעון): אם כל עדכון הנתונים נתקע ל-3 ימים, לא מוציאים את כל הסניפים מההשוואה"""
     a = _ts_age_h(s.get("ts")) if s.get("ts") else None
@@ -889,7 +898,10 @@ def compute(u):
     if not near: return ["אין לי עדיין נתוני סניפים 🙁"]
     rows = []
     for k, (d1, s) in enumerate(near[:MAX_POOL * 2]):
-        if k > 0 and mins(d1) > pr["maxMin"] and len(rows) >= 1: break
+        if k > 0 and mins(d1) > pr["maxMin"] and len(rows) >= 1:
+            regs = [r["min"] for r in rows if not small_store(r["s"])]
+            if mins(d1) > (min(regs) + 5 if regs and min(regs) > pr["maxMin"] else pr["maxMin"] if regs else pr["maxMin"] + REG_EXTRA_MIN): break
+            if small_store(s): continue                # אין סופר רגיל בטווח – הסופרים הרגילים הקרובים (עד 5 דק' אחרי הראשון)
         if stale_store(s): continue                    # מחירים ישנים (השרת הישראלי לא רץ) – לא ממליצים לפיהם (אורי 20/10: דיוק)
         rows.append({"s": s, "d": 2 * d1, "min": mins(d1), "P": D.store_prices(s, clubs), "club": s["chain"] in clubs and s.get("cblob", -1) >= 0})
         if len(rows) >= MAX_POOL: break
@@ -945,6 +957,10 @@ def compute(u):
     reg = next((r for r in rows if r["s"]["key"] == uk), None)
     if reg and not ok_miss(reg): reg = None     # כנראה זיהוי סניף שגוי (או חנות שלא מוכרת את רוב הסל)
     pool = [r for r in rows if r["min"] <= pr["maxMin"] or r is reg] or [nearest]
+    if not any(not small_store(r["s"]) for r in pool):  # בטווח רק תחנות דלק/מכולות – מוסיפים את הסופר הרגיל הקרוב
+        pool += [r for r in rows if r not in pool and not small_store(r["s"])]
+    if any(not small_store(r["s"]) and ok_miss(r) for r in pool):   # יש סופר רגיל – חנות נוחות לא ממליצים עליה (אלא אם זה הסופר שלו)
+        pool = [r for r in pool if not small_store(r["s"]) or r is reg]
     # סניף שחסרים בו הרבה מהמוצרים לא באמת עונה על הסל
     full = [r for r in pool if ok_miss(r)]          # סניף שחסרים בו 4+ מוצרים (או חצי מהסל) – לא נחשב ולא מוצג
     inrange = sorted(full or pool, key=lambda r: r["tot"])

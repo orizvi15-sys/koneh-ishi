@@ -1269,6 +1269,20 @@ def _():
     assert app.switch_need(35, ref, far) == 35 + 15                            # 20 דקות יותר, 5 ראשונות חינם
     assert app.switch_need(35, ref, {"min": 3}) == 35                          # קרוב יותר – אין תוספת
 
+@test("מחנה רעים (אורי 21/10): לא שולחים לתחנת דלק/מכולת ('דור אלון כפר עזה') כשיש סופר רגיל – גם כשהוא מחוץ לטווח הזמן שנבחר")
+def _():
+    D = kdata.D
+    assert app.small_store({"chain": "דור אלון", "n": "דור אלון כפר-עזה"}) and app.small_store({"chain": "שופרסל", "n": "שופרסל BE נתיבות"})
+    assert app.small_store({"chain": "דור אלון", "n": "דור אלון Am-pm נורדאו"}) and not app.small_store({"chain": "שופרסל", "n": "שופרסל אקספרס הרצל"})
+    if not any(s_["chain"] == "דור אלון" and "כפר-עזה" in s_["n"] for s_ in D.stores): return
+    f, _ = app.match_items([{"name": n, "qty": 1} for n in ("ביצים", "חלב", "קוטג'", "לחם", "שמנת")])
+    for mx in (35, 20):
+        u = {"step": "done", "prefs": {"home": [31.388, 34.460], "mode": "car", "maxMin": mx, "splitMin": -1, "clubs": []}, "hist": [], "items": [dict(x) for x in f]}
+        r = app.compute(u); assert isinstance(r, dict), r
+        st = next(s_ for s_ in D.stores if s_["n"] == r["store"])
+        assert not app.small_store(st), (mx, r["main"])
+        assert "דור אלון" not in r["main"], r["main"]                              # גם לא "חוסך לעומת דור אלון (הקרוב אליך)"
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:
