@@ -1283,6 +1283,33 @@ def _():
         assert not app.small_store(st), (mx, r["main"])
         assert "דור אלון" not in r["main"], r["main"]                              # גם לא "חוסך לעומת דור אלון (הקרוב אליך)"
 
+@test("שומר לילה (אורי 22/10 – 'שיפסיק לשלוח הודעות על בעיה בשרת'): השרת הישראלי נפל → הודעה אחת ואז שקט; אותה תקלה עם מספר שעות אחר לא נשלחת שוב")
+def _():
+    D = kdata.D; meta = app.USERS.setdefault("_meta", {}); old_ch = {c: dict(D.chains.get(c) or {}) for c in app.IL_SERVER}
+    old_mute = meta.get("il_mute"); old_alerts = dict(meta.get("alerts", {}))
+    try:
+        from datetime import timedelta
+        ts = (app._dt.now(app.IL_TZ) - timedelta(hours=30)).isoformat(timespec="minutes")
+        for c in app.IL_SERVER: D.chains.setdefault(c, {})["fetched"] = ts
+        meta["il_mute"] = False
+        a = app.watchdog_issues()
+        assert sum("השרת הישראלי לא מעלה" in x for x in a) == 1 and meta["il_mute"] is True, a
+        assert not any(he in x for x in a for he in app.IL_SERVER.values() if "השרת הישראלי" not in x), a   # לא 5 הודעות נפרדות
+        assert not any("השרת הישראלי" in x for x in app.watchdog_issues())                                  # בפעם השנייה – שקט
+        meta["alerts"] = {}; app._watch["t"] = 0
+        orig = app.watchdog_issues; seq = iter([["⚠️ שופרסל לא התעדכנה כבר 13 שעות"], ["⚠️ שופרסל לא התעדכנה כבר 14 שעות"]])
+        app.watchdog_issues = lambda: next(seq)
+        meta.setdefault("admins", [ADMIN])
+        try:
+            OUT.clear(); app.watchdog(); n1 = len(OUT); app._watch["t"] = 0; app.watchdog()
+        finally: app.watchdog_issues = orig
+        assert n1 == 1 and len(OUT) == 1, [o.get("text") for o in OUT]                                   # 14 שעות = אותה תקלה
+    finally:
+        for c, v in old_ch.items(): D.chains[c] = v
+        meta["alerts"] = old_alerts
+        if old_mute is None: meta.pop("il_mute", None)
+        else: meta["il_mute"] = old_mute
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

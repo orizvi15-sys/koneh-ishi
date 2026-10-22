@@ -1516,6 +1516,12 @@ def watchdog_issues():
     if meta_.get("il_mute", True) and il_server_back():          # השרת הישראלי חזר – מבטלים השתקה ומודיעים פעם אחת
         meta_["il_mute"] = False
         out.append("✅ *השרת הישראלי חזר לעבוד* – ויקטורי, חצי חינם, מחסני השוק, נתיב החסד וח. כהן מתעדכנים שוב. ההתראות עליהן חזרו.")
+    il_ages = [_iso_age_h((D.chains.get(c) or {}).get("fetched", "")) for c in IL_SERVER]
+    if not meta_.get("il_mute", True) and all(a is not None and a > 12 for a in il_ages):
+        meta_["il_mute"] = True                                   # השרת הישראלי נפל שוב: הודעה אחת, ואז שקט עד שהוא חוזר (אורי 22/10)
+        out.append(f"🖥️ *השרת הישראלי לא מעלה נתונים* כבר {min(il_ages):.0f} שעות (ויקטורי, חצי חינם, מחסני השוק, נתיב החסד, ח. כהן).\n"
+                   "הבוט ממשיך בלי הרשתות האלה. לא אשלח על זה עוד הודעות – רק \"השרת חזר\" כשהוא יחזור.\n"
+                   "לבדיקה בשרת: `sudo crontab -l` ו-`sudo tail -30 /opt/koneh/log.txt`")
     for ch in dict.fromkeys(list(MAJOR) + list(D.chains) + [c for c in seen if c in CHAIN_HE]):   # כל הרשתות, לא רק הגדולות
         he = MAJOR.get(ch) or CHAIN_HE.get(ch, ch)
         if ch in IL_SERVER and il_muted(): continue               # מושתק עד שהשרת הישראלי מתוקן (אורי 13/10)
@@ -1543,11 +1549,12 @@ def watchdog():
     ad = [a for a in admins() if is_tg(a)]
     if not ad: return
     meta = USERS.setdefault("_meta", {}); sent = meta.setdefault("alerts", {})
-    new = [i for i in watchdog_issues() if time.time() - sent.get(i, 0) > 12 * 3600]   # כל תקלה – פעם ב-12 שעות לכל היותר
+    key = lambda i: re.sub(r"\d+", "#", i)                      # "לא התעדכנה כבר 13/14/15 שעות" = אותה תקלה (22/10: הודעה כל חצי שעה)
+    new = [i for i in watchdog_issues() if time.time() - sent.get(key(i), 0) > 24 * 3600]   # כל תקלה – פעם ביום לכל היותר
     if not new: return
     for a in ad: send_text(a, "🛡️ *שומר לילה – קונה אישי*\n\n" + "\n".join(new))
-    for i in new: sent[i] = time.time()
-    for k in [k for k, t in sent.items() if time.time() - t > 3 * 86400]: sent.pop(k)
+    for i in new: sent[key(i)] = time.time()
+    for k in [k for k, t in sent.items() if time.time() - t > 4 * 86400]: sent.pop(k)
     save_users()
 
 # ---------- בדיקה עצמית יומית: אותה רשימה פעמיים → אותה תוצאה, כמויות הגיוניות, בכמה ערים ----------
