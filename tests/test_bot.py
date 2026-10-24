@@ -721,7 +721,7 @@ def _():
         D.chains["SHUFERSAL"] = dict(old["SHUFERSAL"], fetched="2026-01-01T00:00+02:00")
         iss = "\n".join(app.watchdog_issues())
         assert not any(he in iss for he in app.IL_SERVER.values()), iss
-        assert "שופרסל לא התעדכנה" in iss, iss                              # רשת רגילה – כן מתריעים
+        assert "לא התעדכנה" not in iss, iss                                  # אורי 24/10: גם על רשת רגילה – לא מתריעים
         now = app._dt.now(app.IL_TZ).isoformat(timespec="minutes")
         for c in app.IL_SERVER: D.chains[c]["fetched"] = now
         iss = "\n".join(app.watchdog_issues())
@@ -1283,7 +1283,7 @@ def _():
         assert not app.small_store(st), (mx, r["main"])
         assert "דור אלון" not in r["main"], r["main"]                              # גם לא "חוסך לעומת דור אלון (הקרוב אליך)"
 
-@test("שומר לילה (אורי 22/10 – 'שיפסיק לשלוח הודעות על בעיה בשרת'): השרת הישראלי נפל → הודעה אחת ואז שקט; אותה תקלה עם מספר שעות אחר לא נשלחת שוב")
+@test("שומר לילה (אורי 22/10, 24/10 – בלי הודעות על רשתות שלא מתעדכנות): השרת הישראלי נפל → שקט עד 'חזר'; אותה תקלה עם מספר שעות אחר לא נשלחת שוב")
 def _():
     D = kdata.D; meta = app.USERS.setdefault("_meta", {}); old_ch = {c: dict(D.chains.get(c) or {}) for c in app.IL_SERVER}
     old_mute = meta.get("il_mute"); old_alerts = dict(meta.get("alerts", {}))
@@ -1293,7 +1293,7 @@ def _():
         for c in app.IL_SERVER: D.chains.setdefault(c, {})["fetched"] = ts
         meta["il_mute"] = False
         a = app.watchdog_issues()
-        assert sum("השרת הישראלי לא מעלה" in x for x in a) == 1 and meta["il_mute"] is True, a
+        assert not any("השרת הישראלי" in x for x in a) and meta["il_mute"] is True, a           # אורי 24/10: בשקט
         assert not any(he in x for x in a for he in app.IL_SERVER.values() if "השרת הישראלי" not in x), a   # לא 5 הודעות נפרדות
         assert not any("השרת הישראלי" in x for x in app.watchdog_issues())                                  # בפעם השנייה – שקט
         meta["alerts"] = {}; app._watch["t"] = 0

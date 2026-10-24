@@ -1518,10 +1518,7 @@ def watchdog_issues():
         out.append("✅ *השרת הישראלי חזר לעבוד* – ויקטורי, חצי חינם, מחסני השוק, נתיב החסד וח. כהן מתעדכנים שוב. ההתראות עליהן חזרו.")
     il_ages = [_iso_age_h((D.chains.get(c) or {}).get("fetched", "")) for c in IL_SERVER]
     if not meta_.get("il_mute", True) and all(a is not None and a > 12 for a in il_ages):
-        meta_["il_mute"] = True                                   # השרת הישראלי נפל שוב: הודעה אחת, ואז שקט עד שהוא חוזר (אורי 22/10)
-        out.append(f"🖥️ *השרת הישראלי לא מעלה נתונים* כבר {min(il_ages):.0f} שעות (ויקטורי, חצי חינם, מחסני השוק, נתיב החסד, ח. כהן).\n"
-                   "הבוט ממשיך בלי הרשתות האלה. לא אשלח על זה עוד הודעות – רק \"השרת חזר\" כשהוא יחזור.\n"
-                   "לבדיקה בשרת: `sudo crontab -l` ו-`sudo tail -30 /opt/koneh/log.txt`")
+        meta_["il_mute"] = True                                   # השרת הישראלי נפל: בשקט (אורי 24/10) – רק "השרת חזר" כשהוא חוזר
     for ch in dict.fromkeys(list(MAJOR) + list(D.chains) + [c for c in seen if c in CHAIN_HE]):   # כל הרשתות, לא רק הגדולות
         he = MAJOR.get(ch) or CHAIN_HE.get(ch, ch)
         if ch in IL_SERVER and il_muted(): continue               # מושתק עד שהשרת הישראלי מתוקן (אורי 13/10)
@@ -1530,7 +1527,7 @@ def watchdog_issues():
             if seen.get(ch): out.append(f"⚠️ {he} נעלמה מהנתונים (היו {seen[ch]} סניפים)")
             continue
         a = _iso_age_h(info.get("fetched", ""))
-        if a is not None and a > 12 and ch in MAJOR: out.append(f"⚠️ {he} לא התעדכנה כבר {a:.0f} שעות")
+        # אורי 24/10: בלי התראות על רשת שלא מתעדכנת. הבוט ממילא לא ממליץ לפי מחירים ישנים (stale_store), ומצב הרשתות – בדוח השבועי
         n = info.get("stores", 0)
         if seen.get(ch) and n < 0.75 * seen[ch]: out.append(f"⚠️ {he} ירדה מ-{seen[ch]} ל-{n} סניפים")
         elif n: seen[ch] = max(n, int(seen.get(ch, 0) * 0.9))
