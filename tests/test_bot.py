@@ -1310,6 +1310,37 @@ def _():
         if old_mute is None: meta.pop("il_mute", None)
         else: meta["il_mute"] = old_mute
 
+@test("חיפוש באגים 25/10: קבלה בלי ברקוד ('חלומי' בטיב טעם) – המוצר שנבחר חייב להימכר בסניף שבו קנו, ולא 'חסר בסניף' על מה שקנו שם; 'גרעינים' לא הופך לתירס")
+def _():
+    D = kdata.D; case = None
+    for nm in ("חלומי", "קקאו", "אבקת אפייה", "ריבה", "סבון גוף"):
+        i0 = D.code2i[app.match_items([{"name": nm, "qty": 1}])[0][0]["code"]]
+        for s_ in D.stores[::7]:
+            if app.small_store(s_) or i0 in D.store_prices(s_): continue
+            j = app.in_store_pick(D, s_["key"], {"name": nm, "qty": 1}, i0)
+            if j is not None: case = (nm, s_, i0, j); break
+        if case: break
+    assert case, "לא נמצא מקרה לבדיקה"
+    nm, s_, i0, j = case
+    assert j in D.store_prices(s_) and kdata.toks(D.items[j][1])[0][:3] == kdata.toks(nm)[0][:3], (nm, D.items[j][1])
+    assert app.match_items([{"name": nm, "qty": 1}])[0][0]["code"] == D.items[i0][0]          # רשימה רגילה – בלי שינוי (אותו שם = אותו מוצר)
+    bad = []                                                                                 # שומר: אותה מחלקה – לא "גרעיני תירס" במקום גרעינים
+    for s2 in D.stores[::15]:
+        f, _ = app.match_items([{"name": "גרעינים", "qty": 1, "_rs": s2["key"]}])
+        if "תירס" in f[0]["name"]: bad.append(s2["n"])
+    assert not bad, bad[:3]
+    to = "tg:2510"; setup_user(to, *s_["p"])                                                 # כל הדרך: צילום קבלה מאותו סניף
+    def fk(prompt, image=None, mime=None, keep_dict=False):
+        if prompt.startswith(app.RECEIPT_PROMPT[:40]) and image:
+            return {"store": s_["n"], "items": [{"name": nm, "qty": 1}, {"name": "חלב 3% 1ל", "qty": 2}], "quality": "ok", "issue": ""}
+        return fake_claude(prompt, image, mime, keep_dict)
+    orig = app.claude_json; app.claude_json = fk
+    try: OUT.clear(); photo(to)
+    finally: app.claude_json = orig
+    u = app.USERS[to]
+    assert u.get("rstore") == s_["key"], (u.get("rstore"), s_["key"])
+    assert any(x["code"] == D.items[j][0] for x in u["items"]), [x["name"] for x in u["items"]]
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

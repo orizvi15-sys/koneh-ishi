@@ -494,6 +494,32 @@ def barcode_item(d, code):
 
 def mkey(name): return " ".join(kdata.toks(name)).strip()
 
+def in_store_pick(d, sk, it, cur):
+    """חיפוש באגים שבועי 25/10: בקבלה בלי ברקוד ("חלומי" בטיב טעם הוד השרון) נבחר מוצר שלא נמכר בסניף שבו קנו
+    ("חלומי יעקבס (לק"ג)", 4% מהסניפים) – והסניף של הקבלה יצא "חסר בסניף" על מוצר שהמשתמש קנה שם.
+    אם המוצר שנבחר לא נמכר בסניף של הקבלה: המוצר הראשון בחיפוש שכן נמכר שם – מתחיל באותה מילה, כל המילים שנכתבו,
+    אותה מחלקה, ואם יש מחיר בקבלה – מחיר ליחידה עד פי 2.5 ממנו. אחרת – בלי שינוי. רק ברקודים/דלפק (לא ירקות/בשר מאוחדים)."""
+    code = d.items[cur][0]
+    if not (code[:1].isdigit() or code[:2] == "W:"): return None
+    st = next((s for s in d.stores if s["key"] == sk), None)
+    if not st: return None
+    SP = d.store_prices(st)
+    if cur in SP: return None
+    q = [kdata.stem(w) for w in kdata.toks(it["name"]) if not re.fullmatch(r"[\d.]+", w)]
+    if not q: return None
+    dep = dept_of(code, d.items[cur][1]); dlv = d.dlv_only()
+    try: unit = float(it["price"]) / float(it.get("qty") or 1) if it.get("price") else None
+    except (TypeError, ValueError, ZeroDivisionError): unit = None
+    for j in d.search(it["name"], 30):
+        if j == cur or j not in SP or j in dlv: continue
+        cj = d.items[j][0]
+        if not (cj[:1].isdigit() or cj[:2] == "W:"): continue
+        t = [kdata.stem(w) for w in kdata.toks(d.items[j][1])]
+        if not t or t[0] != q[0] or not set(q) <= set(t) or dept_of(cj, d.items[j][1]) != dep: continue
+        if unit and SP[j] and not (1 / 2.5 <= SP[j] / unit <= 2.5): continue
+        return j
+    return None
+
 def match_items(items, u=None):
     """לכל שם – המוצר במאגר. החלטה שכבר התקבלה (של Claude, או תיקון של המשתמש) נשמרת: אותו שם → תמיד אותו מוצר.
     (בלי זה Claude בחר לפעמים מוצר אחר לאותה רשימה, והמחיר "קפץ" בין ריצות – בדיקה יומית 13/10)"""
@@ -548,6 +574,10 @@ def match_items(items, u=None):
             save_users()
     for i, it in enumerate(items):                     # שם כללי ("פסטה") – מוצר בסיסי לא יוצא "לא מצאתי" גם אם Claude לא בחר
         if picks[i] is None and cand[i]: picks[i] = generic_pick(it["name"], cand[i])
+    for i, it in enumerate(items):                     # שורה מקבלה בלי ברקוד: המוצר שנבחר לא נמכר בסניף שבו קנו → אותו סוג שכן נמכר שם
+        if it.get("_rs") and picks[i] is not None and not it.get("_bc"):
+            j = in_store_pick(d, it["_rs"], it, picks[i])
+            if j is not None: picks[i] = j; cand[i] = [j] + [x for x in cand[i] if x != j]
     def pack_qty(k, q):
         """משקל בק"ג מקבלה (0.5) שהותאם למוצר ארוז (500 גרם) → מספר אריזות (1), ולא חצי אריזה.
         משקל של דלפק (0.18 ק"ג בולגרית) מול אריזה של 250 גרם → 0.72 אריזה – מחיר לפי משקל, לא אריזה שלמה (אורי 20/10)"""
@@ -2215,6 +2245,8 @@ def got_receipt(to, u, img, mime):
     now = int(time.time())
     # תמונה נוספת זמן קצר אחרי הקודמת – כנראה עוד חלק מאותה קבלה: מחברים לאותו סל
     if u.get("rbuf_t", 0) > now - MERGE_SEC and u.get("items") and u.get("step") in ("done", "forgot"):
+        for it in items:
+            if u.get("rstore"): it["_rs"] = u["rstore"]       # הסניף של הקבלה – מוצר שנמכר בו קודם (25/10)
         found, missed = match_items(items, u)
         have = {(x["code"], x["qty"]) for x in u["items"]}
         new = [x for x in found if (x["code"], x["qty"]) not in have]   # שורות שצולמו פעמיים (חפיפה בין התמונות) – פעם אחת
@@ -2232,6 +2264,8 @@ def got_receipt(to, u, img, mime):
     print("receipt store:", store_txt, "->", sk, flush=True)
     if sk: st = u.setdefault("stores", {}); st[sk] = st.get(sk, 0) + 1
     u["rstore"] = sk                                         # הסניף של הקבלה – בסיס ההשוואה, במחירים ששולמו
+    for it in items:
+        if sk: it["_rs"] = sk                                # שורה בלי ברקוד → מוצר שבאמת נמכר בסניף שבו קנו (25/10)
     if meta.get("quality") == "partial":
         u["note"] = "⚠️ חלק מהקבלה לא היה ברור – אפשר לשלוח עכשיו צילום של החלק החסר ואחבר אותו, או לכתוב מה חסר ✍️"
     res = got_items(to, u, items)
