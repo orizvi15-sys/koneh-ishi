@@ -622,6 +622,7 @@ def _():
     r = app.compute(u)
     assert not any(st["n"] in nm or "אונו" in nm and st["chain"] in nm for nm, ml in r["miss_all"]), r["miss_all"]
     for town, p in (("ירוחם", (30.987, 34.929)), ("שלומי", (33.075, 35.145))):
+        if not any(app.km(p, s["p"]) <= 4 and town in s["a"] for s in D.stores): continue   # 01/11: הסניף בשלומי לא בנתונים (השרת הישראלי) – אז "אזור נהריה" נכון
         assert app.place_name(p) == f"אזור {town}", (town, app.place_name(p))
 
 @test("קבלה: 0.5 ק\"ג שהותאם למוצר ארוז של 500 גרם = אריזה אחת (לא חצי) – באג 12/10")
@@ -1340,6 +1341,27 @@ def _():
     u = app.USERS[to]
     assert u.get("rstore") == s_["key"], (u.get("rstore"), s_["key"])
     assert any(x["code"] == D.items[j][0] for x in u["items"]), [x["name"] for x in u["items"]]
+
+@test("חיפוש באגים 01/11: 'שופרסל BEקריית אתא' (BE צמוד לעברית) – בית מרקחת, לא נבחר מקבלה של 'שופרסל' רגיל; 'פתיתים' = פתיתים אפויים ולא גבינה מגורדת; 'עדשים כתומות' = עדשים אדומות")
+def _():
+    D = kdata.D
+    assert app.small_store({"chain": "שופרסל", "n": "שופרסל BEקריית אתא"})                     # \b לא עבד מול אות עברית צמודה
+    assert app.small_store({"chain": "שופרסל", "n": "שופרסל BE אריאל"})
+    assert not app.small_store({"chain": "שופרסל", "n": "שופרסל דיל באר שבע"})
+    assert not app.small_store({"chain": "שופרסל", "n": "שופרסל דיל BEST"})
+    home = (31.2000, 34.0500)                                                                # מקום ריק – רק שני הסניפים המדומים
+    fake = [{"key": "T-BE", "chain": "שופרסל", "n": "שופרסל BEקריית בדיקה", "a": "הרצל 1, קרית בדיקה", "p": [31.2001, 34.0501]},
+            {"key": "T-YESH", "chain": "שופרסל", "n": "שופרסל יש קרית בדיקה- זבולון", "a": "זבולון 2, קרית בדיקה", "p": [31.2050, 34.0550]}]
+    D.stores.extend(fake)
+    try:
+        assert app.match_store("שופרסל – קריית בדיקה", home) == "T-YESH", app.match_store("שופרסל – קריית בדיקה", home)
+        assert app.match_store("שופרסל BE קריית בדיקה", home) == "T-BE"
+    finally:
+        for x in fake: D.stores.remove(x)
+    f, m = app.match_items([{"name": "פתיתים", "qty": 1}])
+    assert not m and "פתיתים" in f[0]["name"] and "גבינה" not in f[0]["name"], f[0]["name"]
+    f, m = app.match_items([{"name": "עדשים כתומות", "qty": 1}])                               # = עדשים אדומות; לא המותג של יוחננוף (5% מהסניפים)
+    assert not m and f[0]["name"].startswith("עדשים") and "יוחננוף" not in f[0]["name"], f[0]["name"]
 
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
