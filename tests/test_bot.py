@@ -1383,6 +1383,15 @@ def _():
         D.online = [dict(near("רמי לוי"), **kdata.ONLINE_SHOPS["7290058140886-39"])]                 # מינימום לא ידוע = 250
         u2 = dict(u, items=[dict(x, qty=1) for x in f[:3]]); assert app.compute(u2).get("online") is None
         D.online = []; assert "משלוח הכי משתלם" not in app.compute(u)["main"]
+        # מחיר לא הגיוני בקובץ האתר (נייר טואלט ₪7.9 מול ₪27.9 בסניפים – רמי לוי אונליין 1/11) – לא נכנס
+        src = near("רמי לוי"); fake = dict(src, key="fake-online", **{k: v for k, v in kdata.ONLINE_SHOPS["7290058140886-39"].items()})
+        P0 = dict(D.store_prices(src, ())); i0 = next(iter(P0)); P0[i0] = P0[i0] * 0.3
+        orig_sp = D.store_prices
+        D.store_prices = lambda st, clubs=(), **kw: P0 if st.get("key") == "fake-online" else orig_sp(st, clubs, **kw)
+        try:
+            T = app.online_prices(D, fake)
+            assert i0 not in T and len(T) > 0.8 * len(P0), (len(T), len(P0))
+        finally: D.store_prices = orig_sp
     finally:
         D.online = old
 

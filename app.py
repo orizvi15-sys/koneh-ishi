@@ -869,6 +869,27 @@ def delivery_option(D, home, items, med, clubs=()):
 ONLINE_MIN_DEFAULT = 250   # מינימום הזמנה כשלא ידוע לנו (ynet 7/2026: "250–350 ש\"ח" ברוב הרשתות) – לא מציעים מה שאי אפשר להזמין
 ONLINE_KM = 15.0         # הרשת מגיעה לאזור? קירוב: יש לה סניף פעיל עד ~15 ק"מ (אין לנו מפת אזורי חלוקה)
 
+_onl_trust = {}
+def online_prices(D, st):
+    """מחירי אתר הרשת – רק מוצרים שהמחיר שלהם קרוב (פי 0.85–1.25) לחציון בסניפים של אותה רשת.
+    1/11: בקובץ "רמי לוי אונליין" חלק מהמחירים לא הגיוניים (נייר טואלט 32 גלילים ₪7.9 מול ₪27.9 בסניפים) – לא ממציאים חיסכון."""
+    k = (st["key"], D.built)
+    if k not in _onl_trust:
+        P = D.store_prices(st, ())
+        sts = [x for x in D.stores if x["chain"] == st["chain"] and not stale_store(x)][:25]
+        vals = collections.defaultdict(list)
+        for x in sts:
+            for i, p in D.store_prices(x, ()).items():
+                if i in P: vals[i].append(p)
+        ok = {}
+        for i, p in P.items():
+            v = vals.get(i)
+            if v and len(v) >= 3:
+                m = sorted(v)[len(v) // 2]
+                if m and 0.85 <= p / m <= 1.25: ok[i] = p
+        _onl_trust.clear(); _onl_trust[k] = ok                     # רק לנתונים הנוכחיים (שומרים זיכרון)
+    return _onl_trust[k]
+
 def online_option(D, home, items, med, clubs=()):
     """אותו סל באתר הרשת, כולל דמי משלוח – האתר הכי זול שמגיע לאזור. None אם אין, אם חסר בו הרבה, או מתחת למינימום."""
     if not items: return None
@@ -876,7 +897,7 @@ def online_option(D, home, items, med, clubs=()):
     best = None
     for st in getattr(D, "online", None) or []:
         if st["chain"] not in near_chains: continue
-        P = D.store_prices(st, clubs); have = tot = 0; mlist = []
+        P = online_prices(D, st); have = tot = 0; mlist = []
         for it in items:
             c = lc(P, it)
             if c is None: mlist.append(it["name"].replace(' (לק"ג)', "")); tot += med[it["i"]] * it["qty"]
