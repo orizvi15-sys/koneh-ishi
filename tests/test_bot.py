@@ -1363,6 +1363,29 @@ def _():
     f, m = app.match_items([{"name": "עדשים כתומות", "qty": 1}])                               # = עדשים אדומות; לא המותג של יוחננוף (5% מהסניפים)
     assert not m and f[0]["name"].startswith("עדשים") and "יוחננוף" not in f[0]["name"], f[0]["name"]
 
+@test("משלוח הכי משתלם (אורי 1/11): שורה אחת – אתר הרשת הכי זול כולל דמי משלוח; רק רשת שיש לה סניף באזור; מתחת למינימום – לא")
+def _():
+    D = kdata.D; old = list(getattr(D, "online", []) or [])
+    home = [32.0880, 34.8860]                                                    # פתח תקווה
+    near = lambda ch: min((s_ for s_ in D.stores if s_["chain"] == ch and not app.stale_store(s_)), key=lambda s_: app.km(home, s_["p"]))
+    try:
+        D.online = [dict(near("שופרסל"), **kdata.ONLINE_SHOPS["7290027600007-413"]),     # מחירי סניף קרוב במקום מחירי האתר – לבדיקה
+                    dict(near("רמי לוי"), **kdata.ONLINE_SHOPS["7290058140886-39"]),
+                    dict(near("רמי לוי"), **dict(kdata.ONLINE_SHOPS["7290058140886-39"], name="רשת רחוקה", chain="אין כזו"))]
+        f, _ = app.match_items([{"name": n, "qty": q} for n, q in (("חלב", 6), ("לחם אחיד", 3), ("ביצים", 3), ("קוטג'", 6), ("פסטה", 5), ("אורז", 3), ("שמן", 2), ("במבה", 6), ("חזה עוף", 2), ("קפה", 2))])
+        u = {"step": "done", "prefs": {"home": home, "mode": "car", "maxMin": 35, "splitMin": -1, "clubs": []}, "hist": [], "items": [dict(x) for x in f]}
+        r = app.compute(u); assert isinstance(r, dict), r
+        o = r.get("online"); assert o and o["name"] in ("שופרסל אונליין", "רמי לוי אונליין"), r["main"]
+        assert f"₪{o['tot']}" in r["main"] and "כולל משלוח" in r["main"] and "רשת רחוקה" not in r["main"], r["main"]
+        assert any(b[0] == o["url"] for b in app.result_buttons(r)), app.result_buttons(r)
+        D.online = [dict(near("רמי לוי"), **dict(kdata.ONLINE_SHOPS["7290058140886-39"], min=5000))]   # סל קטן מהמינימום
+        assert app.compute(u).get("online") is None
+        D.online = [dict(near("רמי לוי"), **kdata.ONLINE_SHOPS["7290058140886-39"])]                 # מינימום לא ידוע = 250
+        u2 = dict(u, items=[dict(x, qty=1) for x in f[:3]]); assert app.compute(u2).get("online") is None
+        D.online = []; assert "משלוח הכי משתלם" not in app.compute(u)["main"]
+    finally:
+        D.online = old
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:

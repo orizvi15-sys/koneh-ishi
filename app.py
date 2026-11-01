@@ -865,6 +865,29 @@ def delivery_option(D, home, items, med, clubs=()):
     if len(mlist) >= MAX_MISSING or len(mlist) * 4 > len(items): return None      # עד רבע מהסל חסר – אחרת זו לא "אותה קנייה"
     return {"s": st, "have": have, "sum": tot, "miss": len(mlist), "mlist": mlist}
 
+# ---------- משלוח מאתר הרשת: "משלוח הכי משתלם" (אורי 1/11) ----------
+ONLINE_MIN_DEFAULT = 250   # מינימום הזמנה כשלא ידוע לנו (ynet 7/2026: "250–350 ש\"ח" ברוב הרשתות) – לא מציעים מה שאי אפשר להזמין
+ONLINE_KM = 15.0         # הרשת מגיעה לאזור? קירוב: יש לה סניף פעיל עד ~15 ק"מ (אין לנו מפת אזורי חלוקה)
+
+def online_option(D, home, items, med, clubs=()):
+    """אותו סל באתר הרשת, כולל דמי משלוח – האתר הכי זול שמגיע לאזור. None אם אין, אם חסר בו הרבה, או מתחת למינימום."""
+    if not items: return None
+    near_chains = {st["chain"] for st in D.stores if km(home, st["p"]) <= ONLINE_KM and not stale_store(st)}
+    best = None
+    for st in getattr(D, "online", None) or []:
+        if st["chain"] not in near_chains: continue
+        P = D.store_prices(st, clubs); have = tot = 0; mlist = []
+        for it in items:
+            c = lc(P, it)
+            if c is None: mlist.append(it["name"].replace(' (לק"ג)', "")); tot += med[it["i"]] * it["qty"]
+            else: have += c[0]; tot += c[0]
+        if len(mlist) >= MAX_MISSING or len(mlist) * 4 > len(items): continue           # לא אותה קנייה
+        if st.get("min") and tot < st["min"]: continue                                   # מתחת למינימום הידוע של הרשת
+        r = {"s": st, "have": have, "sum": tot, "miss": len(mlist), "mlist": mlist, "fee": st["fee"], "tot": tot + st["fee"]}
+        if best is None or r["tot"] < best["tot"]: best = r
+    if best and not best["s"].get("min") and best["sum"] < ONLINE_MIN_DEFAULT: return None   # סל קטן – כנראה מתחת למינימום
+    return best
+
 def basket_price(r, short=False):
     """מחיר כל הסל בסניף – כולל המוצרים שחסרים בו (לפי המחיר באזור), כדי שההשוואה תהיה הוגנת: אותו סל בדיוק בכל סניף.
     (אורי 20/10: "סל שאבא קנה ב-670 עולה במקום אחר 450 כי חסר דברים" – המחיר בלי החסרים הטעה. ובלי הסימן ~)"""
@@ -1065,6 +1088,10 @@ def compute(u):
         elif avg and avg - best["tot"] >= 1:
             L.append(f"✅ חוסך *₪{avg - best['tot']:.0f}*{inc}")
     L.append(f"{ride} {round(best['min'])} דק' {how} ממך")       # בלי "(אזור …)" – האזור מופיע ב"היי" (אורי 20/10: פחות מלל)
+    onl = online_option(D, home, items, med, clubs)
+    if onl:
+        miss_o = f" (חסרים {onl['miss']})" if onl["miss"] else ""
+        L.append(f"🚚 משלוח הכי משתלם: *{onl['s']['name']}* ₪{onl['tot']:.0f} כולל משלוח{miss_o}")
     dlv = delivery_option(D, home, items, med, clubs)
     if dlv: L.append(f"🛵 או במשלוח מ*{dlv['s']['chain']}*: {basket_price(dlv, short=True)} + דמי משלוח")
     if rare:                                   # רק כמה – את השמות רואים בכפתור "מה חסר" (אורי 18/10: רשימה ארוכה מבלבלת)
@@ -1113,7 +1140,9 @@ def compute(u):
             "miss_all": [(full_name(r["s"]), list(r["mlist"])) for r in shown if r["miss"]],
             "stay": stay, "gap": round(gap), "ref": ref["s"]["n"] if ref else None, "store_key": s["key"], "ref_key": ref["s"]["key"] if ref else None, "ref_have": round(ref["have"]) if ref else None,
             "have": round(best["have"]), "sum": round(best["sum"]), "ref_sum": round(ref["sum"]) if ref else None, "mins": round(best["min"]), "kosher": is_kosher(s),
-            "wolt": {"chain": dlv["s"]["chain"], "have": round(dlv["have"]), "miss": dlv["miss"]} if dlv else None}
+            "wolt": {"chain": dlv["s"]["chain"], "have": round(dlv["have"]), "miss": dlv["miss"]} if dlv else None,
+            "online": {"name": onl["s"]["name"], "tot": round(onl["tot"]), "fee": onl["fee"], "url": onl["s"].get("url"),
+                       "miss": onl["miss"]} if onl else None}
 
 # ---------- שיחה ----------
 WELCOME = "היי{name}! 👋 אני אעזור לך לחסוך בקניות 🛒\nכמה שאלות קצרות ומתחילים 😊"
@@ -1146,11 +1175,13 @@ def ask(to, step, u, intro="", loc_btn=False):
             send_buttons(to, intro + "*מה קונים?*", [("cam", "📷 צילום קבלה"), ("list", "✍️ אכתוב רשימה"), ("weekly", "🛒 סל שבועי רגיל")] + lb)
     save_users()
 
-LAST_KEYS = ("details", "others", "split", "store", "ip", "miss", "rare", "miss_all", "nav", "store_key", "ref_key", "stay", "gap", "wolt")
+LAST_KEYS = ("details", "others", "split", "store", "ip", "miss", "rare", "miss_all", "nav", "store_key", "ref_key", "stay", "gap", "wolt", "online")
 
 def result_buttons(res):
     """בהודעה הראשית רק שני כפתורים: "✅ נלך לשם" ו"📋 פרטים" (אורי 20/10: פשוט יותר). השאר בתוך "פרטים"."""
-    return [("plan_ok", "✅ נלך לשם"), ("more", "📋 פרטים")] + ([(WOLT_URL, "🛵 להזמין בוולט")] if res.get("wolt") else [])
+    o = res.get("online") or {}
+    return ([("plan_ok", "✅ נלך לשם"), ("more", "📋 פרטים")] + ([(o["url"], "🚚 להזמין במשלוח")] if o.get("url") else [])
+            + ([(WOLT_URL, "🛵 להזמין בוולט")] if res.get("wolt") else []))
 
 def details_buttons(last):
     """תפריט "פרטים": מה חסר (אם יש), מה זיהיתי, סופרים אחרים, תיקון"""

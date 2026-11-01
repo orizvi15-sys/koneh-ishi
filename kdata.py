@@ -100,6 +100,16 @@ UNIT_WORDS = {"ק\"ג", "קג", "קילו", "גרם", "גר", "ליטר", "מ\"�
 EXCLUDE_STORES = re.compile(r"המפיץ|סיטונאות|Test Venue", re.I)
 MULTI_WORD = {"2": "זוג", "3": "שלישי", "4": "רביעי", "6": "שישי", "8": "שמיני"}
 DELIVERY_STORES = re.compile(r"וולט|wolt", re.I)
+# אתרי הקנייה (משלוח עד הבית) של הרשתות – מחירי האתר מקבצי השקיפות, דמי משלוח ומינימום מכתבות (אורי 1/11).
+# min=None = לא ידוע. מקורות: ynet 4.7/13.7.2026, כלכליסט 14.7.2026, pickpackage.com (נבדק 17.9.2026) – לעדכן כשמשתנה.
+ONLINE_SHOPS = {
+    "7290027600007-413": {"name": "שופרסל אונליין", "chain": "שופרסל", "fee": 35.9, "min": None, "url": "https://www.shufersal.co.il/online/"},
+    "7290058140886-39": {"name": "רמי לוי אונליין", "chain": "רמי לוי", "fee": 35.9, "min": None, "url": "https://www.rami-levy.co.il/he/online"},
+    "7290696200003-97": {"name": "ויקטורי אונליין", "chain": "ויקטורי", "fee": 35.9, "min": 250, "url": None},
+    "7290661400001-97": {"name": "מחסני השוק אונליין", "chain": "מחסני השוק", "fee": 38.9, "min": None, "url": None},
+    "7290700100008-103": {"name": "חצי חינם משלוחים", "chain": "חצי חינם", "fee": 35.9, "min": 500, "url": "https://shop.hazi-hinam.co.il/"},
+}
+ONLINE_ASOF = "יולי–ספטמבר 2026"
 PRICE_FILTER = True
 PRICE_CACHE = 60      # סניפים במטמון (חישוב אחד משתמש בעד 25)   # tools/price_audit.py מכבה כדי לראות את הנתונים הגולמיים
 
@@ -460,7 +470,7 @@ class Data:
         ל"מוצרלה טרייה | דליקטסן" של וולט, שלא נמכר באף סופר). avail כולל את מחסני המשלוחים, לכן: avail פחות מספר המחסנים ≤ 0."""
         if self._dlv_only is None:
             c = defaultdict(int)
-            for st in self.delivery:
+            for st in list(self.delivery) + list(getattr(self, "online", []) or []):   # גם אתרי הרשתות – לא סופר שאפשר ללכת אליו
                 for i in self.prices(st["blob"], cache=False): c[i] += 1
             self._dlv_only = {i for i, k in c.items() if self.items[i][2] - k <= 0}
         return self._dlv_only
@@ -502,7 +512,7 @@ def _from_bin(path):
 
     for it in h["items"]:                                     # סימני כיווון בשמות (וולט) – עד שהבנייה תנקה אותם
         if "\u202b" in it[1] or "\u202c" in it[1] or "\u200f" in it[1]: it[1] = re.sub(r"[\u200e\u200f\u202a-\u202e]", "", it[1]).strip()
-    stores, delivery = [], []
+    stores, delivery, online = [], [], []
     STORE_FIX = {"7290803800003-7": [31.8605, 34.8225],   # יוחננוף עקרון – הכתובת "המלך חסן 1" מוקמה בטעות בשדרות
                  "7290058249350-26": [32.2770, 34.8570]}  # וולט מרקט נתניה פולג – בקובץ העיר "נס ציונה" (19/10)
     for row in h["stores"]:
@@ -517,10 +527,12 @@ def _from_bin(path):
         st = {"key": key, "chain": chain, "n": n, "a": a, "p": [lat, lng], "blob": blob, "ts": ts, "prec": prec,
               "cblob": cblob, "pblob": pblob, "mblob": mblob, "cmblob": cmblob}
         # מחסן משלוחים (וולט מרקט) – לא נכנס להשוואה ולהמלצות, רק אופציה נוספת "במשלוח" (אורי 19/10)
+        if key in ONLINE_SHOPS: online.append(dict(st, **ONLINE_SHOPS[key])); continue   # אתר הרשת – רק אופציית משלוח
         if DELIVERY_STORES.search(chain or ""): delivery.append(st)
         elif not DELIVERY_STORES.search(name or ""): stores.append(st)   # "קינג סטור וולט …" – סניף משלוחים של רשת אחרת: לא בכלל (19/10)
     D_ = Data(h["items"], stores, h["v"], h.get("built", ""), reader, "remote")
     D_.delivery = delivery
+    D_.online = online
     D_.chains = h.get("chains", {})
     D_.qa = h.get("qa", {})
     return D_
