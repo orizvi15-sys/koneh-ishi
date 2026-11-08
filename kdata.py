@@ -94,6 +94,11 @@ FB_SYN = {"סבון כלים": "נוזל כלים", "נוזל כלים": "סבו
           "נוזל כביסה": "ג'ל כביסה", "ג'ל כביסה": "נוזל כביסה", "קוקה קולה": "קוקה-קולה", "נייר כסף": "נייר אלומיניום",
           "נייר אלומיניום": "נייר כסף", "משקה סויה": "חלב סויה", "מלפפונים במלח": "מלפפון במלח", "מלפפון במלח": "מלפפונים במלח"}
 SEARCH_UNITS = {"גר", "גרם", "ג", "ק", "קג", "ק\"ג", "קילו", "ל", "ליטר", "מל", "מ\"ל", "יח", "יחידות", "יחי", "מ"}
+# חיפוש באגים 08/11: מגהץ TEFAL ב-₪550 "הוחלף" במגהץ אחר ב-₪299 כ"מוצר דומה" → "חוסך ₪543" על קבלה של ₪1650.
+# במוצרים יקרים (מכשירים, יין, בשמים) דגם אחר הוא לא אותו מוצר: אין "מוצר דומה", וחלופה ("במקום:") רק במחיר רגיל דומה (±15%).
+# מה שאין – נספר כמוצר מיוחד (אותו מחיר בכל סניף), בלי חיסכון מומצא.
+SIM_MAX_PRICE = 10000                                      # באגורות (₪100)
+PRICEY_FB = (0.85, 1.18)
 UNIT_WORDS = {"ק\"ג", "קג", "קילו", "גרם", "גר", "ליטר", "מ\"ל", "מל", "יח", "יחידות", "ארוז", "ארוזה", "פרוס", "פרוסה"}
 
 # סניפים שלא נכנסים להשוואה: שופרסל המפיץ סיטונאות (אשדוד, באר שבע) – חנות לעסקים, בלי חלב/לחם/ביצים (אורי 13/10)
@@ -287,8 +292,10 @@ class Data:
                 cands = self.group(i, " ".join(words), n=40, tol=0.25)
                 alt = FB_SYN.get(" ".join(words))
                 if alt: cands = cands + self.group(i, alt, n=40, tol=0.25)      # "סבון כלים" = "נוזל כלים"
+                p0 = self.items[i][3]
+                pricey = lambda j: p0 and p0 > SIM_MAX_PRICE and not (self.items[j][3] and PRICEY_FB[0] * p0 <= self.items[j][3] <= PRICEY_FB[1] * p0)
                 for j in dict.fromkeys(cands):
-                    if j in base: continue
+                    if j in base or pricey(j): continue
                     nm = self.items[j][1]
                     if any(f in nm and f not in have for f in FB_VARIANT): continue
                     if pct and not pct <= _pcts(nm): continue   # חלב 3% ≠ 1%
@@ -307,7 +314,7 @@ class Data:
                         k = next((n for n, x in enumerate(t) if any(x.startswith(w) for w in qs)), 0)
                         if not set(t[:k]) <= TYPE_HEAD: continue
                         s1, p1 = self.size(j), self.items[j][3]
-                        if not s1 or abs(s1 - s0) > 0.25 * s0 or not p1 or not 0.6 * p0 <= p1 <= 1.6 * p0: continue
+                        if not s1 or abs(s1 - s0) > 0.25 * s0 or not p1 or not 0.6 * p0 <= p1 <= 1.6 * p0 or pricey(j): continue
                         nm = self.items[j][1]; rest = " ".join(toks(nm)[k:])
                         if any(f in rest and f not in have for f in FB_VARIANT): continue
                         if pct and not pct <= _pcts(nm): continue
@@ -351,7 +358,7 @@ class Data:
         if code[:1].isdigit():
             kw = [w for w in toks(name) if w not in UNIT_WORDS and w not in SEARCH_UNITS and not re.fullmatch(r"[\d.,*xX%]+", w)][:2]
             s0, p0 = self.size(i), self.items[i][3]
-            if len(kw) == 2 and p0:
+            if len(kw) == 2 and p0 and p0 <= SIM_MAX_PRICE:
                 ks = [stem(w) for w in kw]
                 for j in self.search(" ".join(kw), 60):
                     if j == i or not self.items[j][0][:1].isdigit() or self.items[j][2] < 30: continue

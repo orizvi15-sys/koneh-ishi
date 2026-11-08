@@ -1395,6 +1395,25 @@ def _():
     finally:
         D.online = old
 
+@test("חיפוש באגים 08/11: מוצר יקר (מגהץ TEFAL ₪550) לא 'מוחלף' בדגם אחר זול כ'מוצר דומה' – בלי חיסכון מומצא של מאות שקלים")
+def _():
+    D = kdata.D
+    exp = [i for i, it in enumerate(D.items) if it[0][:1].isdigit() and it[3] and it[3] > kdata.SIM_MAX_PRICE and it[2] >= 15]
+    assert len(exp) > 50, len(exp)
+    bad = [D.items[i][1] for i in exp[:400] if D.similar_alts(i)]
+    assert not bad, bad[:5]
+    for i in [i for i in exp if "מגהץ" in D.items[i][1]][:5]: assert D.similar_alts(i) == [], D.items[i][1]
+    lo, hi = kdata.PRICEY_FB                                                     # חלופה ("במקום:") למוצר יקר – רק במחיר רגיל דומה
+    for i in exp[:400]:
+        p0 = D.items[i][3]
+        for j in D.fallback(i):
+            assert D.items[j][3] and lo * p0 <= D.items[j][3] <= hi * p0, (D.items[i][1], p0, D.items[j][1], D.items[j][3])
+    tf = [i for i in exp if "TEFAL" in D.items[i][1] and "מגהץ" in D.items[i][1]]
+    for i in tf[:3]:                                                             # הקבלה מהבדיקה: מגהץ ₪550 ≠ "מגהץ קיטור טפאל 2000" ₪299
+        assert not any(D.items[j][3] < 0.8 * D.items[i][3] for j in D.fallback(i) + [j for j, _ in D.similar_alts(i)]), D.items[i][1]
+    cheap = [i for i, it in enumerate(D.items) if it[0][:1].isdigit() and it[3] and 500 < it[3] < 3000 and it[2] >= 30][:300]
+    assert sum(1 for i in cheap if D.similar_alts(i)) > 20                         # מוצרים רגילים – עדיין יש "מוצר דומה" (20/10)
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:
