@@ -97,7 +97,9 @@ SEARCH_UNITS = {"גר", "גרם", "ג", "ק", "קג", "ק\"ג", "קילו", "ל"
 # חיפוש באגים 08/11: מגהץ TEFAL ב-₪550 "הוחלף" במגהץ אחר ב-₪299 כ"מוצר דומה" → "חוסך ₪543" על קבלה של ₪1650.
 # במוצרים יקרים (מכשירים, יין, בשמים) דגם אחר הוא לא אותו מוצר: אין "מוצר דומה", וחלופה ("במקום:") רק במחיר רגיל דומה (±15%).
 # מה שאין – נספר כמוצר מיוחד (אותו מחיר בכל סניף), בלי חיסכון מומצא.
-SIM_MAX_PRICE = 10000                                      # באגורות (₪100)
+EGG_SIZE = {"E01": r"(?<![A-Za-z])L(?![A-Za-z])|לארג|גדול", "E02": r"(?<![A-Za-z])M(?![A-Za-z])|מדיום|בינוני"}   # ביצים 12 → תבנית 18/30 לפי ביצה
+EGG_SKIP = re.compile(r"אומגה|חופש|שליו|דג|פורל|אורגני|XL|ענק|DHA")
+SIM_MAX_PRICE = 10000                                     # באגורות (₪100)
 PRICEY_FB = (0.85, 1.18)
 UNIT_WORDS = {"ק\"ג", "קג", "קילו", "גרם", "גר", "ליטר", "מ\"ל", "מל", "יח", "יחידות", "ארוז", "ארוזה", "פרוס", "פרוסה"}
 
@@ -329,7 +331,16 @@ class Data:
         if key in self._groups: return self._groups[key]
         code, name = self.items[i][0], self.items[i][1]; out = []
         s0 = self.size(i)
-        if code[:1].isdigit() and s0:
+        if code in EGG_SIZE:                               # 15/11: 23 סניפים (שפע ברכת השם, אושר עד, רמי לוי ביתר…) מוכרים רק תבניות 18/30
+            for j, it in enumerate(self.items):
+                nm = it[1]
+                if not it[0][:1].isdigit() or not re.match(r"(קרטון\s+)?ביצים ", nm) or EGG_SKIP.search(nm): continue
+                m = re.search(r"(?<!\d)(18|20|30)(?!\d)", nm)
+                if not m or not re.search(EGG_SIZE[code], nm): continue
+                n = int(m.group(1)); p0, p1 = self.items[i][3], it[3]
+                if p0 and p1 and not 0.8 <= (p1 / n) / (p0 / 12) <= 1.25: continue   # מחיר לביצה כמו בתבנית 12 (מחיר מפוקח)
+                out.append((j, 12 / n))
+        elif code[:1].isdigit() and s0:
             words = [w for w in toks(query or name) if w not in UNIT_WORDS and not re.fullmatch(r"[\d.,*xX]+", w)][:2]
             have = name + " " + (query or "")
             if "מוקפא" in have or "קפוא" in have: have += " קפוא מוקפא"

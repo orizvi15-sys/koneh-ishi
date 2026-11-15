@@ -1414,6 +1414,32 @@ def _():
     cheap = [i for i, it in enumerate(D.items) if it[0][:1].isdigit() and it[3] and 500 < it[3] < 3000 and it[2] >= 30][:300]
     assert sum(1 for i in cheap if D.similar_alts(i)) > 20                         # מוצרים רגילים – עדיין יש "מוצר דומה" (20/10)
 
+@test("חיפוש באגים 15/11: 'ביצים' בסניף שמוכר רק תבניות 18/30 (שפע ברכת השם, אושר עד, רמי לוי רמת בית שמש) – לפי הגודל, לא 'חסר'")
+def _():
+    D = kdata.D
+    for code, size, other in (("E01", r"(?<![A-Za-z])L(?![A-Za-z])|לארג|גדול", r"(?<![A-Za-z])M(?![A-Za-z])|בינוני"),
+                              ("E02", r"(?<![A-Za-z])M(?![A-Za-z])|בינוני|מדיום", r"(?<![A-Za-z])L(?![A-Za-z])|לארג")):
+        if code not in D.code2i: continue
+        i = D.code2i[code]; sc = D.scaled_alts(i)
+        assert sc, code
+        for j, f in sc:
+            nm = D.items[j][1]
+            assert re.search(size, nm) and not re.search(other, nm), (code, nm)          # אותה מידה
+            assert not re.search(r"אומגה|חופש|שליו|XL|ענק|דג", nm), nm                     # בלי ביצים מיוחדות
+            n = 18 if re.search(r"(?<!\d)18(?!\d)", nm) else 30 if re.search(r"(?<!\d)30(?!\d)", nm) else 20
+            assert abs(f - 12 / n) < 1e-9, (nm, f)
+    i = D.code2i.get("E01")
+    if i is None: return
+    it = {"g": D.group(i), "fb": D.fallback(i), "sc": D.scaled_alts(i), "qty": 1}
+    sc = {j for j, _ in it["sc"]}; tried = 0
+    for s in D.stores:                                                             # סניף אמיתי בלי תבנית 12 – מחיר לפי ביצה
+        P = D.store_prices(s, (), cache=False)
+        if any(g in P for g in it["g"] + it["fb"]) or not sc & set(P): continue
+        r = app.lc(P, it); tried += 1
+        assert r and "לפי הגודל" in r[2], (s["n"], r)
+        assert 9 <= r[0] <= 22, (s["n"], r)                                        # בערך מחיר של 12 ביצים, לא של 30
+        if tried >= 5: break
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:
