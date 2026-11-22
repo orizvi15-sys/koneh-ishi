@@ -496,6 +496,8 @@ def barcode_item(d, code):
 
 def mkey(name): return " ".join(kdata.toks(name)).strip()
 
+FORM_FIRST = {kdata.stem(w) for w in ("אבקת", "נוזל")}    # מילת צורה לפני שם המוצר בשם של הרשת – חיפוש באגים 22/11
+
 def in_store_pick(d, sk, it, cur):
     """חיפוש באגים שבועי 25/10: בקבלה בלי ברקוד ("חלומי" בטיב טעם הוד השרון) נבחר מוצר שלא נמכר בסניף שבו קנו
     ("חלומי יעקבס (לק"ג)", 4% מהסניפים) – והסניף של הקבלה יצא "חסר בסניף" על מוצר שהמשתמש קנה שם.
@@ -512,14 +514,19 @@ def in_store_pick(d, sk, it, cur):
     dep = dept_of(code, d.items[cur][1]); dlv = d.dlv_only()
     try: unit = float(it["price"]) / float(it.get("qty") or 1) if it.get("price") else None
     except (TypeError, ValueError, ZeroDivisionError): unit = None
+    ok = []
     for j in d.search(it["name"], 30):
         if j == cur or j not in SP or j in dlv: continue
         cj = d.items[j][0]
         if not (cj[:1].isdigit() or cj[:2] == "W:"): continue
         t = [kdata.stem(w) for w in kdata.toks(d.items[j][1])]
-        if not t or t[0] != q[0] or not set(q) <= set(t) or dept_of(cj, d.items[j][1]) != dep: continue
+        first = t[0] == q[0] or (len(t) > 1 and t[0] in FORM_FIRST and t[1] == q[0])   # "קקאו" ↔ "אבקת קקאו עלית" (22/11)
+        if not t or not first or not set(q) <= set(t) or dept_of(cj, d.items[j][1]) != dep: continue
         if unit and SP[j] and not (1 / 2.5 <= SP[j] / unit <= 2.5): continue
-        return j
+        if not unit or not SP[j]: return j
+        ok.append(j)
+    if ok:                                               # יש מחיר בקבלה – הכי קרוב למה ששולם (150 גרם ₪15.9 ולא 450 גרם ₪37.9) – 22/11
+        return min(ok, key=lambda j: abs(math.log(SP[j] / unit)))
     return None
 
 def match_items(items, u=None):

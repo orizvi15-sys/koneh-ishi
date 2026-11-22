@@ -1440,6 +1440,27 @@ def _():
         assert 9 <= r[0] <= 22, (s["n"], r)                                        # בערך מחיר של 12 ביצים, לא של 30
         if tried >= 5: break
 
+@test("חיפוש באגים 22/11: קבלה 'קקאו' מסופר שמוכר רק 'אבקת קקאו עלית' – נבחר מה שנמכר שם (לא 'חסר בסניף' על מה שקנו), ובמחיר הקרוב למה ששולם")
+def _():
+    D = kdata.D
+    i0 = D.code2i[app.match_items([{"name": "קקאו", "qty": 1}])[0][0]["code"]]
+    case = None
+    for s_ in D.stores:
+        if app.small_store(s_): continue
+        P = D.store_prices(s_)
+        if i0 in P: continue
+        cs = [j for j in D.search("קקאו", 30) if j in P and kdata.toks(D.items[j][1])[:2] == ["אבקת", "קקאו"]
+              and D.items[j][0][:1].isdigit() and P[j]]
+        if len({round(P[j], 1) for j in cs}) >= 2: case = (s_, cs, P); break
+    if not case: return                                                            # תלוי בנתונים
+    s_, cs, P = case
+    lo = min(cs, key=lambda j: P[j])
+    j = app.in_store_pick(D, s_["key"], {"name": "קקאו", "qty": 1, "price": P[lo]}, i0)
+    assert j is not None and j in P and "קקאו" in D.items[j][1], (s_["n"], j)
+    assert abs(P[j] - P[lo]) < 0.01, (D.items[j][1], P[j], P[lo])                # הכי קרוב למה ששולם
+    j2 = app.in_store_pick(D, s_["key"], {"name": "קקאו", "qty": 1, "price": P[lo] * 10}, i0)
+    assert j2 is None, D.items[j2][1]                                              # מחיר רחוק פי 2.5 – לא
+
 # ---------- סיכום ----------
 ok = sum(1 for r in RESULTS if r[0])
 for passed, name, err in RESULTS:
